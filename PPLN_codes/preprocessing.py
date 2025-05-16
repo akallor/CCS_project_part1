@@ -15,7 +15,7 @@ import numpy as np
 # parameters
 #data_path = './data.csv'    # path to csv file
 data_path = '/content/CCS_project_part1/processed_data/immunopeptide_data_JPST002044.tsv'
-column_idx = 1              # column index of sequence data in csv file
+column_idx = 0             # column index of sequence data in csv file
 a = 1000                    # parameter for positional encoding
 b = 1                       # parameter for positional encoding
 gamma = 0                   # parameter for positional encoding
