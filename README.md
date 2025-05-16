@@ -12,8 +12,8 @@ This repository contains/will contain:
 4) Links to Colab, where most codes will be run.
 
 The order of functioning is as follows:
-1) Prepare the datasets to contain at the minimum peptide sequence, charge, mass and collision cross section values (1/k0 or invk0) in addition to other optional parameters such as length.
-2) Input the prepared data to the "preprocessing.py" script of PPLN and run preprocessing.
-3) Perform training and testing with the "main" script.
+1) Prepare the datasets to contain at the minimum peptide sequence, charge, mass and collision cross section values (calculated using the Mason-Schamp equation from 1/k0 or invk0 found in the data) and other optional parameters such as length.
+2) Input the prepared data to the "preprocessing.py" script of PPLN and run preprocessing (however, preprocessing only needs sequences).
+3) Perform training and testing with the "main" script (to test the output from the training on a pre-trained neural network to output CCS).
 4) Output will be the predicted CCS values per immunopeptide, which must be evaluated using either or all of RMSE, MAE and Pearson's correlation.
 5) Output will also be evaluated on how accurately the CCS values can be predicted for immune peptides and whether it can distinguish between MHC-1 and MHC-2.
