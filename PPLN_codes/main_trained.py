@@ -24,7 +24,7 @@ bs = 200                                # batch size
 
 # data preparation
 with open(data_path_test) as f:
-    reader = csv.reader(f)
+    reader = csv.reader(f,delimiter = '\t')
     datalist_test = [row for row in reader]
 del(datalist_test[0])   # remove label if necessary
 sequence_representations_test = torch.load(sequence_path_test)
