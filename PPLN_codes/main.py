@@ -35,11 +35,11 @@ istestloss = True
 
 # data preparation
 with open(data_path_train) as f:
-    reader = csv.reader(f)
+    reader = csv.reader(f,delimiter = '\t')
     datalist_train = [row for row in reader]
 del(datalist_train[0])  # remove label if necessary
 with open(data_path_test) as f:
-    reader = csv.reader(f)
+    reader = csv.reader(f,delimiter = '\t')
     datalist_test = [row for row in reader]
 del(datalist_test[0])   # remove label if necessary
 sequence_representations_train = torch.load(sequence_path_train)
