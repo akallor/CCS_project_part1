@@ -7,6 +7,10 @@ print("Loading data...")
 train_data = pd.read_csv("/content/drive/MyDrive/Colab_CCS_results/MHC_1/processed_data/combined_raw_data_sub.tsv", 
                         sep='\t')
 
+#Filter out for MHC-I or II based on requirement
+
+train_data = train_data[train_data.Length <= 12]
+
 print(f"Original data shape: {train_data.shape}")
 
 # Constants for CCS calculation
