@@ -21,13 +21,13 @@ import numpy as np
 np.set_printoptions(threshold=np.inf)
 
 # parameters
-data_path_train = './data_train.csv'    # path to csv file for training
-data_path_test = './data_test.csv'      # path to csv file for test
+data_path_train = '/content/drive/MyDrive/Colab_CCS_results/MHC_1/processed_data/train_1.tsv'    # path to csv file for training
+data_path_test = '/content/drive/MyDrive/Colab_CCS_results/MHC_1/processed_data/test_1.tsv'      # path to csv file for test
 column_idx_expccs = 2                   # column index of experimental ccs value data in csv file
 column_idx_z = 3                        # column index of charge data in csv file
 column_idx_mass = 4                     # column index of mass data in csv file
-sequence_path_train = './sequenceTensor_a1000b1gamma0_train.pt' # path to preprocessed sequence data for training
-sequence_path_test = './sequenceTensor_a1000b1gamma0_test.pt'   # path to preprocessed sequence data for test
+sequence_path_train = '/content/drive/MyDrive/Colab_CCS_results/MHC_1/results/sequenceTensor_mhcI_train_a1000b1gamma0.pt' # path to preprocessed sequence data for training
+sequence_path_test = '/content/drive/MyDrive/Colab_CCS_results/MHC_1/results/sequenceTensor_mhcI_test_a1000b1gamma0.pt'   # path to preprocessed sequence data for test
 bs = 200                                # batch size
 lr_adam = 0.0003                        # learning rate
 num_ep = 400                            # number of epochs
@@ -199,7 +199,7 @@ def main():
     torch.save(model.to('cpu').state_dict(),'trainedmodel.pt')
     print(history)
     print('test_predictCCS：{0}'.format(predictCCS))
-    np.savetxt("out_test_predictCCS.csv", predictCCS, delimiter=",")
+    np.savetxt("/content/drive/MyDrive/Colab_CCS_results/MHC_1/results/out_test_predictCCS_mhcI.csv", predictCCS, delimiter=",")
 
 
 if __name__ == '__main__':
