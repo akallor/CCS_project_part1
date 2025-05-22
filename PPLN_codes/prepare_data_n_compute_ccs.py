@@ -4,8 +4,8 @@ from sklearn.model_selection import train_test_split
 
 # Load the data
 print("Loading data...")
-train_data = pd.read_csv("/content/CCS_project_part1/raw_data/pep_all_06133b_jy_raji_spike.csv", 
-                        sep=',', on_bad_lines='skip', engine='python')
+train_data = pd.read_csv("/content/drive/MyDrive/Colab_CCS_results/MHC_1/processed_data/combined_raw_data_sub.tsv", 
+                        sep='\t')
 
 print(f"Original data shape: {train_data.shape}")
 
@@ -54,8 +54,9 @@ def convert_invK0_to_CCS(invK0, charge, mass, temperature=298.15, gas_mass=28.01
 print("Preprocessing data...")
 
 # Select required columns
-required_columns = ['Sample', 'Sequence', 'invk0', 'Charge', 'Mass']
+required_columns = ['Sample', 'Sequence', 'invk0_exp', 'z_estimated', 'Mass']
 data_subset = train_data[required_columns].copy()
+data_subset = data_subset.rename(columns = {'z_estimated':'Charge'})
 
 # Remove rows with missing values
 data_subset = data_subset.dropna()
@@ -69,7 +70,7 @@ print("Handling duplicate sequences...")
 # Option 2: Average measurements for duplicate sequences (recommended)
 data_clean = data_subset.groupby('Sequence').agg({
     'Sample': 'first',  # Keep first sample name
-    'invk0': 'mean',    # Average invk0 values
+    'invk0_exp': 'mean',    # Average invk0 values
     'Charge': 'first',  # Assuming charge is consistent for same sequence
     'Mass': 'first'     # Assuming mass is consistent for same sequence
 }).reset_index()
@@ -79,7 +80,7 @@ print(f"Data shape after handling duplicates: {data_clean.shape}")
 # Calculate CCS for all data
 print("Calculating CCS values...")
 data_clean['CCS_Experimental'] = convert_invK0_to_CCS(
-    data_clean['invk0'],
+    data_clean['invk0_exp'],
     data_clean['Charge'], 
     data_clean['Mass']
 )
@@ -108,13 +109,13 @@ output_columns = ['Sample', 'Sequence', 'CCS_Experimental', 'Charge', 'Mass']
 # Save the splits
 print("Saving train and test sets...")
 train_data_split[output_columns].to_csv(
-    "/content/CCS_project_part1/processed_data/train_1.tsv", 
+    "/content/drive/MyDrive/Colab_CCS_results/MHC_1/processed_data/train_1.tsv", 
     sep='\t', 
     index=False
 )
 
 test_data_split[output_columns].to_csv(
-    "/content/CCS_project_part1/processed_data/test_1.tsv", 
+    "/content/drive/MyDrive/Colab_CCS_results/MHC_1/processed_data/test_1.tsv", 
     sep='\t', 
     index=False
 )
