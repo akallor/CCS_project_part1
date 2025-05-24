@@ -9,7 +9,7 @@ and used only for calculating test loss, not used for CCS prediction.
 If you do not have experimental CCS values for test data, 
 please set the variable 'istestloss' to be 'False'.
 """
-
+import os as os
 import torch
 from torch import optim
 import torch.nn as nn
@@ -182,6 +182,14 @@ def main():
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=lr_adam)
 
+    # Prepare log file path
+    log_file = "/content/drive/MyDrive/Colab_CCS_results/MHC_1/results/training_log.tsv"
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    
+    # Write header to log file
+    with open(log_file, 'w') as f:
+        f.write("epoch\ttrain_rmse\ttest_rmse\n")
+
     for epoch in range(num_ep):
         print(f"Epoch {epoch+1}\n-------------------------------")
         # training
@@ -194,6 +202,10 @@ def main():
             history['test_rmse'].append(test_loss)
         else:
             predictCCS = test(test_loader, model, criterion, device)
+    
+    # Append epoch data to log file
+        with open(log_file, 'a') as f:
+            f.write(f"{epoch+1}\t{train_loss:.6f}\t{test_loss:.6f}\n")
 
     # save
     torch.save(model.to('cpu').state_dict(),'trainedmodel.pt')
