@@ -47,43 +47,43 @@ class TrainingConfig:
     def __init__(self):
         # Basic parameters
         self.bs = 200
-        self.base_lr = 0.0001
+        self.base_lr = 0.00001
         self.num_epochs = 400
-        self.warmup_epochs = 10
+        self.warmup_epochs = 20
         self.patience = 15
         self.accumulation_steps = 8
         self.ema_decay = 0.999
-        self.max_grad_norm = 0.5
+        self.max_grad_norm = 0.1
         
         # Model selection
-        self.model_type = 'both'  # Options: 'improved', 'ensemble', 'both'
+        self.model_type = 'both'
         self.ensemble_size = 3
-        self.ensemble_weights = None  # Will be set based on validation performance
+        self.ensemble_weights = None
         
         # Advanced parameters
-        self.weight_decay = 0.1
-        self.label_smoothing = 0.1
-        self.dropout_rate = 0.2
-        self.hidden_dim = 256
+        self.weight_decay = 0.01
+        self.label_smoothing = 0.05
+        self.dropout_rate = 0.1
+        self.hidden_dim = 128
         self.num_folds = 5
         
         # Learning rate schedule
-        self.min_lr = 1e-6
+        self.min_lr = 1e-7
         self.cycle_momentum = True
-        self.cycle_decay = 0.8
+        self.cycle_decay = 0.9
         
         # SWA parameters
         self.swa_start = 100
-        self.swa_lr = 0.05
+        self.swa_lr = 0.01
         self.swa_anneal_epochs = 10
         
         # Regularization
-        self.mixup_alpha = 0.2
-        self.gradient_clip_val = 0.5
+        self.mixup_alpha = 0.1
+        self.gradient_clip_val = 0.1
         
         # Ensemble specific
-        self.diversity_weight = 0.1  # Weight for ensemble diversity loss
-        self.temperature = 2.0  # Temperature for ensemble soft predictions
+        self.diversity_weight = 0.05
+        self.temperature = 1.0
 
 class FeatureNormalizer:
     def __init__(self):
