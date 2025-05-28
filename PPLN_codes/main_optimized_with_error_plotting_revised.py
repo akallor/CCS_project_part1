@@ -75,7 +75,11 @@ def load_data():
     
     # Prepare training data
     train_seq = torch.stack(sequence_representations_train)
-    train_cm = torch.cat((torch.tensor(datalist_train)[:, column_idx_z].view(-1, 1), torch.tensor(datalist_train)[:, column_idx_mass].view(-1, 1)), dim=1)
+    
+    # Convert string data to float tensors
+    train_z = torch.tensor([float(row[column_idx_z]) for row in datalist_train])
+    train_mass = torch.tensor([float(row[column_idx_mass]) for row in datalist_train])
+    train_cm = torch.stack([train_z, train_mass], dim=1)
     train_ccs = torch.tensor([float(row[column_idx_expccs]) for row in datalist_train])
     
     # Fit and transform training data
@@ -84,11 +88,15 @@ def load_data():
     
     # Transform test data
     test_seq = torch.stack(sequence_representations_test)
-    test_cm = torch.cat((torch.tensor(datalist_test)[:, column_idx_z].view(-1, 1), torch.tensor(datalist_test)[:, column_idx_mass].view(-1, 1)), dim=1)
+    test_z = torch.tensor([float(row[column_idx_z]) for row in datalist_test])
+    test_mass = torch.tensor([float(row[column_idx_mass]) for row in datalist_test])
+    test_cm = torch.stack([test_z, test_mass], dim=1)
+    
     test_seq_norm, test_cm_norm = normalizer.transform(test_seq, test_cm)
     
     if istestloss:
-        test_ccs_norm = torch.FloatTensor(normalizer.target_scaler.transform(torch.tensor([float(row[column_idx_expccs]) for row in datalist_test]).view(-1, 1))).squeeze()
+        test_ccs = torch.tensor([float(row[column_idx_expccs]) for row in datalist_test])
+        test_ccs_norm = torch.FloatTensor(normalizer.target_scaler.transform(test_ccs.view(-1, 1))).squeeze()
     
     # Create datasets with normalized data
     dataset_train = TensorDataset(train_cm_norm, train_seq_norm, train_ccs_norm)
