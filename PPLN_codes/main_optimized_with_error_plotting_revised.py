@@ -45,45 +45,34 @@ DATA_PATHS = {
 
 class TrainingConfig:
     def __init__(self):
-        # Basic parameters
-        self.bs = 200
-        self.base_lr = 0.00001
+        # TPU-optimized parameters
+        self.bs = 256  # Further reduced batch size
+        self.base_lr = 1e-4  # Reduced learning rate
         self.num_epochs = 400
-        self.warmup_epochs = 20
+        self.warmup_epochs = 5
         self.patience = 15
-        self.accumulation_steps = 8
-        self.ema_decay = 0.999
-        self.max_grad_norm = 0.1
+        self.accumulation_steps = 1
         
-        # Model selection
-        self.model_type = 'both'
+        # Model parameters
+        self.model_type = 'improved'
         self.ensemble_size = 3
         self.ensemble_weights = None
         
-        # Advanced parameters
-        self.weight_decay = 0.01
-        self.label_smoothing = 0.05
-        self.dropout_rate = 0.1
-        self.hidden_dim = 128
+        # Training parameters
+        self.weight_decay = 1e-4  # Increased weight decay
+        self.label_smoothing = 0.0  # Removed label smoothing
+        self.dropout_rate = 0.2  # Increased dropout
+        self.hidden_dim = 128  # Increased hidden dimension
         self.num_folds = 5
         
         # Learning rate schedule
-        self.min_lr = 1e-7
-        self.cycle_momentum = True
-        self.cycle_decay = 0.9
-        
-        # SWA parameters
-        self.swa_start = 100
-        self.swa_lr = 0.01
-        self.swa_anneal_epochs = 10
+        self.min_lr = 1e-6
+        self.cycle_momentum = False
+        self.cycle_decay = 0.95
         
         # Regularization
-        self.mixup_alpha = 0.1
-        self.gradient_clip_val = 0.1
-        
-        # Ensemble specific
-        self.diversity_weight = 0.05
-        self.temperature = 1.0
+        self.mixup_alpha = 0.0  # Removed mixup
+        self.gradient_clip_val = 0.5  # Reduced gradient clipping
 
 class FeatureNormalizer:
     def __init__(self):
@@ -92,13 +81,26 @@ class FeatureNormalizer:
         self.target_scaler = StandardScaler()
         
     def fit(self, seq_features, charge_mass, targets):
-        self.seq_scaler.fit(seq_features.view(-1, seq_features.size(-1)))
+        # Reshape for proper scaling
+        seq_features_2d = seq_features.view(-1, seq_features.size(-1))
+        self.seq_scaler.fit(seq_features_2d)
         self.charge_mass_scaler.fit(charge_mass)
         self.target_scaler.fit(targets.reshape(-1, 1))
         
+        # Store mean and std for debugging
+        self.seq_mean = torch.tensor(self.seq_scaler.mean_, dtype=torch.float32)
+        self.seq_std = torch.tensor(self.seq_scaler.scale_, dtype=torch.float32)
+        self.target_mean = self.target_scaler.mean_[0]
+        self.target_std = self.target_scaler.scale_[0]
+        
+        print(f"Target mean: {self.target_mean:.4f}, std: {self.target_std:.4f}")
+        
     def transform(self, seq_features, charge_mass, targets=None):
-        seq_norm = torch.FloatTensor(self.seq_scaler.transform(seq_features.view(-1, seq_features.size(-1)))).view(seq_features.size())
+        # Reshape for proper scaling
+        seq_features_2d = seq_features.view(-1, seq_features.size(-1))
+        seq_norm = torch.FloatTensor(self.seq_scaler.transform(seq_features_2d)).view(seq_features.size())
         cm_norm = torch.FloatTensor(self.charge_mass_scaler.transform(charge_mass))
+        
         if targets is not None:
             targets_norm = torch.FloatTensor(self.target_scaler.transform(targets.reshape(-1, 1))).squeeze()
             return seq_norm, cm_norm, targets_norm
@@ -107,29 +109,31 @@ class FeatureNormalizer:
     def inverse_transform_targets(self, targets):
         return self.target_scaler.inverse_transform(targets.reshape(-1, 1)).squeeze()
 
-# Advanced loss function with focal loss and label smoothing
-class FocalMSELoss(_Loss):
-    def __init__(self, alpha=2.0, gamma=2.0, reduction='mean'):
-        super(FocalMSELoss, self).__init__(reduction=reduction)
-        self.alpha = alpha
-        self.gamma = gamma
+class HuberMSELoss(nn.Module):
+    def __init__(self, delta=1.0):
+        super(HuberMSELoss, self).__init__()
+        self.delta = delta
         
-    def forward(self, input, target):
-        mse = F.mse_loss(input, target, reduction='none')
-        focal_weight = torch.exp(-self.alpha * mse) ** self.gamma
-        loss = focal_weight * mse
+    def forward(self, pred, target):
+        diff = pred - target
+        mask = torch.abs(diff) <= self.delta
+        loss = torch.where(mask,
+                          0.5 * diff ** 2,
+                          self.delta * torch.abs(diff) - 0.5 * self.delta ** 2)
         return loss.mean()
 
 # Mixup augmentation
 def mixup_data(x, y, alpha=0.2):
+    """Performs mixup on the input data and target."""
     if alpha > 0:
         lam = np.random.beta(alpha, alpha)
     else:
         lam = 1
 
     batch_size = x.size()[0]
-    index = torch.randperm(batch_size).cuda()
-
+    index = torch.randperm(batch_size)
+    
+    # No need for explicit device placement - TPU will handle it
     mixed_x = lam * x + (1 - lam) * x[index]
     mixed_y = lam * y + (1 - lam) * y[index]
     return mixed_x, mixed_y
@@ -182,89 +186,70 @@ class ImprovedCCSPredictor(nn.Module):
         self.dropout_rate = config.dropout_rate
         hidden_dim = config.hidden_dim
         
-        # Sequence processor with enhanced residual connections
+        # Input normalization layers
+        self.seq_norm = nn.LayerNorm(esm_dim)
+        self.cm_norm = nn.LayerNorm(2)
+        
+        # Sequence processor
         self.sequence_processor = nn.Sequential(
-            nn.Linear(esm_dim, hidden_dim),
+            nn.Linear(esm_dim, hidden_dim * 2),
+            nn.LayerNorm(hidden_dim * 2),
+            nn.GELU(),
+            nn.Dropout(self.dropout_rate),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(self.dropout_rate)
+        )
+        
+        # Charge/mass processor
+        self.charge_mass_processor = nn.Sequential(
+            nn.Linear(2, hidden_dim // 2),
+            nn.LayerNorm(hidden_dim // 2),
+            nn.GELU(),
+            nn.Dropout(self.dropout_rate),
+            nn.Linear(hidden_dim // 2, hidden_dim // 2),
+            nn.LayerNorm(hidden_dim // 2),
+            nn.GELU(),
+            nn.Dropout(self.dropout_rate)
+        )
+        
+        # Final predictor with residual connections
+        self.predictor = nn.Sequential(
+            nn.Linear(hidden_dim + hidden_dim // 2, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.GELU(),
             nn.Dropout(self.dropout_rate),
-            EnhancedResidualBlock(hidden_dim, hidden_dim * 2, self.dropout_rate),
-            EnhancedResidualBlock(hidden_dim, hidden_dim * 2, self.dropout_rate),
-            nn.LayerNorm(hidden_dim)
-        )
-        
-        # Enhanced charge/mass processor
-        self.charge_mass_processor = nn.Sequential(
-            nn.Linear(2, 64),
-            nn.LayerNorm(64),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.LayerNorm(hidden_dim // 2),
             nn.GELU(),
-            nn.Dropout(self.dropout_rate/2),
-            EnhancedResidualBlock(64, 128, self.dropout_rate/2),
-            nn.Linear(64, 64),
-            nn.LayerNorm(64),
-            nn.GELU()
+            nn.Dropout(self.dropout_rate),
+            nn.Linear(hidden_dim // 2, 1)
         )
         
-        # Advanced predictor with skip connections
-        self.predictor = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(hidden_dim + 64, hidden_dim),
-                nn.LayerNorm(hidden_dim),
-                nn.GELU(),
-                nn.Dropout(self.dropout_rate)
-            ),
-            nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim // 2),
-                nn.LayerNorm(hidden_dim // 2),
-                nn.GELU(),
-                nn.Dropout(self.dropout_rate/2)
-            ),
-            nn.Sequential(
-                nn.Linear(hidden_dim // 2, hidden_dim // 4),
-                nn.LayerNorm(hidden_dim // 4),
-                nn.GELU()
-            )
-        ])
-        
-        # Final prediction layer to output a single value
-        self.final_layer = nn.Linear(hidden_dim // 4, 1)
-        
-        # Initialize weights
+        # Initialize weights carefully
         self.apply(self._init_weights)
         
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
-            torch.nn.init.xavier_uniform_(module.weight, gain=0.5)
+            nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='linear')
             if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
+                nn.init.zeros_(module.bias)
                 
     def forward(self, seq_features, charge_mass):
-        # Apply advanced regularization during training
-        if self.training:
-            seq_features = F.dropout2d(seq_features.unsqueeze(-1), p=0.1, training=True).squeeze(-1)
-            charge_mass = F.dropout(charge_mass, p=0.05, training=True)
+        # Apply input normalization
+        seq_features = self.seq_norm(seq_features)
+        charge_mass = self.cm_norm(charge_mass)
         
         # Process features
         seq_processed = self.sequence_processor(seq_features)
         cm_processed = self.charge_mass_processor(charge_mass)
         
-        # Forward with skip connections
+        # Combine features
         x = torch.cat([seq_processed, cm_processed], dim=1)
-        intermediate = []
-        for layer in self.predictor:
-            x = layer(x)
-            intermediate.append(x)
         
-        # Final prediction
-        x = self.final_layer(x)
-        
-        # Add skip connection from first to last layer if dimensions match
-        if len(intermediate) > 1:
-            skip_connection = F.adaptive_avg_pool1d(intermediate[0].unsqueeze(-1), 1).squeeze(-1)
-            if skip_connection.shape[1] == x.shape[1]:  # Only add if dimensions match
-                x = x + 0.1 * skip_connection
-        
-        return x
+        # Predict
+        return self.predictor(x)
 
 class EnhancedEnsembleCCSPredictor(nn.Module):
     def __init__(self, config, esm_dim=1280*2):
@@ -319,50 +304,59 @@ def create_model(config, device):
         raise ValueError(f"Unknown model type: {config.model_type}")
 
 def train_epoch(model, train_loader, optimizer, criterion, device, config, scheduler, epoch):
-    if isinstance(model, dict):
-        return train_epoch_both(model, train_loader, optimizer, criterion, device, config, scheduler, epoch)
-    
     model.train()
     total_loss = 0
-    all_preds = []
-    all_targets = []
-    optimizer.zero_grad()
+    running_loss = 0.0
+    batch_count = 0
+    
+    import torch_xla.core.xla_model as xm
+    
+    # Store predictions and targets in lists for batch processing
+    epoch_preds = []
+    epoch_targets = []
     
     for batch_idx, (charge_mass, seq, ccs) in enumerate(train_loader):
         charge_mass = charge_mass.to(device, dtype=torch.float)
         seq = seq.to(device)
         ccs = ccs.to(device, dtype=torch.float)
         
-        # Apply mixup augmentation
-        if config.mixup_alpha > 0 and epoch >= config.warmup_epochs:
-            seq, ccs = mixup_data(seq, ccs, config.mixup_alpha)
+        # Zero gradients
+        optimizer.zero_grad()
         
         # Forward pass
-        if isinstance(model, EnhancedEnsembleCCSPredictor):
-            output, ensemble_preds = model(seq, charge_mass)
-            loss = criterion(output, ccs.view(-1, 1))
-            # Add diversity loss for ensemble
-            diversity_loss = model.get_diversity_loss(ensemble_preds)
-            loss = loss + config.diversity_weight * diversity_loss
+        output = model(seq, charge_mass)
+        loss = criterion(output, ccs.view(-1, 1))
+        
+        if not torch.isnan(loss):
+            # Gradient clipping before backward pass
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.gradient_clip_val)
+            
+            # Optimizer step with XLA optimization
+            xm.optimizer_step(optimizer)
+            xm.mark_step()
         else:
-            output = model(seq, charge_mass)
-            loss = criterion(output, ccs.view(-1, 1))
+            print(f"NaN loss detected at batch {batch_idx}")
+            continue
         
-        # Scale loss for gradient accumulation
-        loss = loss / config.accumulation_steps
-        loss.backward()
+        # Record metrics
+        total_loss += loss.item() * len(charge_mass)
+        batch_count += 1
         
-        if (batch_idx + 1) % config.accumulation_steps == 0:
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                max_norm=config.gradient_clip_val
-            )
-            optimizer.step()
-            optimizer.zero_grad()
+        # Store predictions and targets for later processing
+        epoch_preds.append(output.detach())
+        epoch_targets.append(ccs.view(-1, 1).detach())
         
-        total_loss += loss.item() * len(charge_mass) * config.accumulation_steps
-        all_preds.extend(output.detach().cpu().numpy())
-        all_targets.extend(ccs.view(-1, 1).detach().cpu().numpy())
+        # Monitor running loss
+        running_loss += loss.item()
+        if (batch_idx + 1) % 10 == 0:
+            print(f'Batch {batch_idx + 1}, Running Loss: {running_loss / 10:.4f}')
+            running_loss = 0.0
+    
+    # Process all predictions and targets at once
+    with torch.no_grad():
+        all_preds = torch.cat(epoch_preds, dim=0).cpu().numpy()
+        all_targets = torch.cat(epoch_targets, dim=0).cpu().numpy()
     
     metrics = calculate_metrics(all_targets, all_preds)
     metrics['loss'] = total_loss / len(train_loader.dataset)
@@ -397,14 +391,13 @@ def train_epoch_both(models, train_loader, optimizers, criterion, device, config
         'ensemble': metrics_ensemble
     }
 
-def validate(model, val_loader, criterion, device):
-    if isinstance(model, dict):
-        return validate_both(model, val_loader, criterion, device)
-        
+def validate(model, val_loader, criterion, device, save_predictions=False, save_path=None):
     model.eval()
     total_loss = 0
     all_preds = []
     all_targets = []
+    
+    import torch_xla.core.xla_model as xm
     
     with torch.no_grad():
         for charge_mass, seq, ccs in val_loader:
@@ -412,16 +405,20 @@ def validate(model, val_loader, criterion, device):
             seq = seq.to(device)
             ccs = ccs.to(device, dtype=torch.float)
             
-            if isinstance(model, EnhancedEnsembleCCSPredictor):
-                output = model(seq, charge_mass)  # No need for ensemble_preds in eval
-            else:
-                output = model(seq, charge_mass)
-                
+            output = model(seq, charge_mass)
             loss = criterion(output, ccs.view(-1, 1))
             
             total_loss += loss.item() * len(charge_mass)
             all_preds.extend(output.cpu().numpy())
             all_targets.extend(ccs.view(-1, 1).cpu().numpy())
+    
+    # Convert to numpy arrays
+    all_preds = np.array(all_preds)
+    all_targets = np.array(all_targets)
+    
+    # Save predictions if requested
+    if save_predictions and save_path:
+        np.savetxt(save_path, all_preds, delimiter='\t')
     
     metrics = calculate_metrics(all_targets, all_preds)
     metrics['loss'] = total_loss / len(val_loader.dataset)
@@ -524,63 +521,34 @@ def train_with_cv(config, train_loader, test_loader, device, normalizer):
         fold_train_loader = DataLoader(
             train_dataset, 
             batch_size=config.bs,
-            sampler=train_sampler
+            sampler=train_sampler,
+            num_workers=0
         )
         fold_val_loader = DataLoader(
             train_dataset,
             batch_size=config.bs,
-            sampler=val_sampler
+            sampler=val_sampler,
+            num_workers=0
         )
         
-        # Initialize model(s) and training components
+        # Initialize model and move to TPU
         model = create_model(config, device)
-        criterion = FocalMSELoss()
         
-        if isinstance(model, dict):
-            optimizer = {
-                'improved': torch.optim.AdamW(
-                    model['improved'].parameters(),
-                    lr=config.base_lr,
-                    weight_decay=config.weight_decay,
-                    betas=(0.9, 0.999)
-                ),
-                'ensemble': torch.optim.AdamW(
-                    model['ensemble'].parameters(),
-                    lr=config.base_lr,
-                    weight_decay=config.weight_decay,
-                    betas=(0.9, 0.999)
-                )
-            }
-            
-            scheduler = {
-                'improved': get_lr_schedule(optimizer['improved'], config),
-                'ensemble': get_lr_schedule(optimizer['ensemble'], config)
-            }
-            
-            swa_model = {
-                'improved': AveragedModel(model['improved']),
-                'ensemble': AveragedModel(model['ensemble'])
-            }
-            
-            swa_scheduler = {
-                'improved': SWALR(optimizer['improved'], swa_lr=config.swa_lr),
-                'ensemble': SWALR(optimizer['ensemble'], swa_lr=config.swa_lr)
-            }
-        else:
-            optimizer = torch.optim.AdamW(
-                model.parameters(),
-                lr=config.base_lr,
-                weight_decay=config.weight_decay,
-                betas=(0.9, 0.999)
-            )
-            scheduler = get_lr_schedule(optimizer, config)
-            swa_model = AveragedModel(model)
-            swa_scheduler = SWALR(optimizer, swa_lr=config.swa_lr)
+        # Initialize optimizer and criterion
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=config.base_lr,
+            weight_decay=config.weight_decay,
+            betas=(0.9, 0.999)
+        )
+        criterion = HuberMSELoss()
+        scheduler = get_lr_schedule(optimizer, config)
         
         # Training loop
         best_val_rmse = float('inf')
         patience_counter = 0
         fold_history = initialize_fold_history(config.model_type)
+        best_model_state = None
         
         for epoch in range(config.num_epochs):
             # Training
@@ -589,56 +557,55 @@ def train_with_cv(config, train_loader, test_loader, device, normalizer):
                 device, config, scheduler, epoch
             )
             
+            # For TPU, we need to wait for computations to finish
+            if hasattr(device, 'type') and device.type == 'xla':
+                import torch_xla.core.xla_model as xm
+                xm.mark_step()
+            
             # Validation
             val_metrics = validate(model, fold_val_loader, criterion, device)
             
-            # Update SWA model
-            if epoch >= config.swa_start:
-                if isinstance(model, dict):
-                    for model_type in model:
-                        swa_model[model_type].update_parameters(model[model_type])
-                        swa_scheduler[model_type].step()
-                else:
-                    swa_model.update_parameters(model)
-                    swa_scheduler.step()
-            else:
-                if isinstance(scheduler, dict):
-                    for sched in scheduler.values():
-                        sched.step()
-                else:
-                    scheduler.step()
+            # Step the scheduler
+            scheduler.step()
             
             # Record metrics
             update_fold_history(fold_history, train_metrics, val_metrics, config.model_type)
             
-            # Early stopping check
-            current_val_rmse = get_validation_rmse(val_metrics, config.model_type)
+            # Early stopping check with debug info
+            current_val_rmse = val_metrics['rmse']
             if current_val_rmse < best_val_rmse:
+                improvement = best_val_rmse - current_val_rmse
                 best_val_rmse = current_val_rmse
+                print(f"\nRMSE improved by {improvement:.6f}")
                 patience_counter = 0
+                # Save best model state
+                best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
             else:
                 patience_counter += 1
+                print(f"\nNo improvement. Patience: {patience_counter}/{config.patience}")
                 
             if patience_counter >= config.patience:
-                print(f'Early stopping triggered at epoch {epoch+1}')
+                print(f'\nEarly stopping triggered! No improvement for {config.patience} epochs.')
+                print(f'Best validation RMSE: {best_val_rmse:.4f}')
                 break
             
             print_epoch_metrics(epoch, train_metrics, val_metrics, config.model_type)
         
-        # Final evaluation with SWA model
-        if isinstance(model, dict):
-            swa_results = {
-                model_type: validate(swa_model[model_type], test_loader, criterion, device)
-                for model_type in model
-            }
-        else:
-            swa_results = validate(swa_model, test_loader, criterion, device)
-            
+        # Load best model for final evaluation
+        if best_model_state is not None:
+            model.load_state_dict(best_model_state)
+        
+        # Final evaluation and save predictions
+        predictions_path = f'predictions_fold_{fold+1}.tsv'
+        test_metrics = validate(model, test_loader, criterion, device, 
+                              save_predictions=True, save_path=predictions_path)
+        
         fold_results.append({
             'fold': fold + 1,
             'best_val_rmse': best_val_rmse,
-            'swa_results': swa_results,
-            'history': fold_history
+            'test_metrics': test_metrics,
+            'history': fold_history,
+            'predictions_path': predictions_path
         })
     
     return fold_results
@@ -715,9 +682,18 @@ def main():
     # Initialize configuration
     config = TrainingConfig()
     
+    # Set up TPU if available
+    try:
+        import torch_xla
+        import torch_xla.core.xla_model as xm
+        device = xm.xla_device()
+        print("TPU device detected and initialized")
+    except ImportError:
+        device = torch.device('cpu')
+        print("No TPU found, using CPU")
+    
     # Load and prepare data with normalization
     train_loader, test_loader, normalizer = load_data()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # Perform cross-validation training
     cv_results = train_with_cv(config, train_loader, test_loader, device, normalizer)
@@ -729,15 +705,15 @@ def analyze_cv_results(cv_results, config):
     """Enhanced analysis function with additional visualizations."""
     # Calculate average metrics across folds
     avg_metrics = {
-        'test_rmse': np.mean([r['test_rmse'] for r in cv_results]),
-        'test_r2': np.mean([r['test_r2'] for r in cv_results]),
+        'test_rmse': np.mean([r['test_metrics']['rmse'] for r in cv_results]),
+        'test_r2': np.mean([r['test_metrics']['r2'] for r in cv_results]),
         'best_val_rmse': np.mean([r['best_val_rmse'] for r in cv_results])
     }
     
     # Calculate standard deviations
     std_metrics = {
-        'test_rmse': np.std([r['test_rmse'] for r in cv_results]),
-        'test_r2': np.std([r['test_r2'] for r in cv_results]),
+        'test_rmse': np.std([r['test_metrics']['rmse'] for r in cv_results]),
+        'test_r2': np.std([r['test_metrics']['r2'] for r in cv_results]),
         'best_val_rmse': np.std([r['best_val_rmse'] for r in cv_results])
     }
     
@@ -750,26 +726,22 @@ def analyze_cv_results(cv_results, config):
     # Plot learning curves for each fold
     plot_cv_learning_curves(cv_results, config)
     
-    # Create prediction analysis plots for each model type
+    # Create prediction analysis plots for each fold
     plot_dir = "model_analysis_plots"
     os.makedirs(plot_dir, exist_ok=True)
     
-    if config.model_type == 'both':
-        for model_type in ['improved', 'ensemble', 'combined']:
-            if os.path.exists(f'out_test_predictCCS_mhcI_{model_type}.csv'):
-                plot_prediction_analysis(
-                    'test_1.tsv',
-                    f'out_test_predictCCS_mhcI_{model_type}.csv',
-                    plot_dir,
-                    model_type
-                )
-    else:
-        plot_prediction_analysis(
-            'test_1.tsv',
-            f'out_test_predictCCS_mhcI_{config.model_type}.csv',
-            plot_dir,
-            config.model_type
-        )
+    # Plot predictions for each fold
+    for result in cv_results:
+        if os.path.exists(result['predictions_path']):
+            fold_num = result['fold']
+            plot_prediction_analysis(
+                DATA_PATHS['test_data'],
+                result['predictions_path'],
+                plot_dir,
+                f'fold_{fold_num}'
+            )
+            
+    print("\nAnalysis completed. Plots saved in 'model_analysis_plots' directory.")
 
 def plot_cv_learning_curves(cv_results, config):
     plt.figure(figsize=(15, 10))
@@ -964,10 +936,8 @@ def load_data():
     # Create normalizer
     normalizer = FeatureNormalizer()
     
-    # Prepare training data
+    # Prepare training data - convert to tensors once
     train_seq = torch.stack(sequence_representations_train)
-    
-    # Convert string data to float tensors
     train_z = torch.tensor([float(row[3]) for row in datalist_train], dtype=torch.float32)
     train_mass = torch.tensor([float(row[4]) for row in datalist_train], dtype=torch.float32)
     train_cm = torch.stack([train_z, train_mass], dim=1)
@@ -977,7 +947,7 @@ def load_data():
     normalizer.fit(train_seq, train_cm, train_ccs)
     train_seq_norm, train_cm_norm, train_ccs_norm = normalizer.transform(train_seq, train_cm, train_ccs)
     
-    # Transform test data
+    # Transform test data - convert to tensors once
     test_seq = torch.stack(sequence_representations_test)
     test_z = torch.tensor([float(row[3]) for row in datalist_test], dtype=torch.float32)
     test_mass = torch.tensor([float(row[4]) for row in datalist_test], dtype=torch.float32)
@@ -990,9 +960,21 @@ def load_data():
     dataset_train = TensorDataset(train_cm_norm, train_seq_norm, train_ccs_norm)
     dataset_test = TensorDataset(test_cm_norm, test_seq_norm, test_ccs_norm)
     
-    # Create data loaders
-    train_loader = DataLoader(dataset_train, batch_size=200, shuffle=True)
-    test_loader = DataLoader(dataset_test, batch_size=200, shuffle=False)
+    # Create data loaders with TPU-optimized settings
+    train_loader = DataLoader(
+        dataset_train,
+        batch_size=512,  # Reduced batch size
+        shuffle=True,
+        drop_last=True,
+        num_workers=0  # Disable multiprocessing for TPU
+    )
+    test_loader = DataLoader(
+        dataset_test,
+        batch_size=512,  # Reduced batch size
+        shuffle=False,
+        drop_last=True,
+        num_workers=0  # Disable multiprocessing for TPU
+    )
     
     return train_loader, test_loader, normalizer
 
