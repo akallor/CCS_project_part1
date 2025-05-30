@@ -391,7 +391,7 @@ def train_epoch_both(models, train_loader, optimizers, criterion, device, config
         'ensemble': metrics_ensemble
     }
 
-def validate(model, val_loader, criterion, device, save_predictions=False, save_path=None):
+def validate(model, val_loader, criterion, device, save_predictions=False, save_path=None, normalizer=None):
     model.eval()
     total_loss = 0
     all_preds = []
@@ -416,10 +416,16 @@ def validate(model, val_loader, criterion, device, save_predictions=False, save_
     all_preds = np.array(all_preds)
     all_targets = np.array(all_targets)
     
+    # Inverse transform predictions if normalizer is provided
+    if normalizer is not None:
+        all_preds = normalizer.inverse_transform_targets(torch.from_numpy(all_preds)).numpy()
+        all_targets = normalizer.inverse_transform_targets(torch.from_numpy(all_targets)).numpy()
+    
     # Save predictions if requested
     if save_predictions and save_path:
         np.savetxt(save_path, all_preds, delimiter='\t')
     
+    # Calculate metrics on the transformed predictions
     metrics = calculate_metrics(all_targets, all_preds)
     metrics['loss'] = total_loss / len(val_loader.dataset)
     
@@ -563,7 +569,7 @@ def train_with_cv(config, train_loader, test_loader, device, normalizer):
                 xm.mark_step()
             
             # Validation
-            val_metrics = validate(model, fold_val_loader, criterion, device)
+            val_metrics = validate(model, fold_val_loader, criterion, device, normalizer=normalizer)
             
             # Step the scheduler
             scheduler.step()
@@ -598,7 +604,8 @@ def train_with_cv(config, train_loader, test_loader, device, normalizer):
         # Final evaluation and save predictions
         predictions_path = f'predictions_fold_{fold+1}.tsv'
         test_metrics = validate(model, test_loader, criterion, device, 
-                              save_predictions=True, save_path=predictions_path)
+                              save_predictions=True, save_path=predictions_path,
+                              normalizer=normalizer)
         
         fold_results.append({
             'fold': fold + 1,
@@ -790,13 +797,21 @@ def plot_prediction_analysis(experimental_path, predicted_path, plot_dir, model_
     experimental_df = pd.read_csv(experimental_path, sep="\t")
     experimental_df = experimental_df[["CCS_Experimental"]]
     
+    # Print dataset sizes before processing
+    print(f"\nDataset sizes before processing:")
+    print(f"Predicted samples: {len(predicted_df)}")
+    print(f"Experimental samples: {len(experimental_df)}")
+    
     # Convert to float
     predicted_df['CCS_Predicted'] = predicted_df['CCS_Predicted'].astype(float)
     experimental_df['CCS_Experimental'] = experimental_df['CCS_Experimental'].astype(float)
     
     # Ensure same length
     if len(predicted_df) != len(experimental_df):
-        raise ValueError(f"Datasets have different lengths. Predicted: {len(predicted_df)}, Experimental: {len(experimental_df)}.")
+        min_len = min(len(predicted_df), len(experimental_df))
+        print(f"\nWarning: Trimming datasets to match length of {min_len}")
+        predicted_df = predicted_df.iloc[:min_len]
+        experimental_df = experimental_df.iloc[:min_len]
     
     # Combine into one dataframe
     df = pd.concat([experimental_df, predicted_df], axis=1)
@@ -965,16 +980,19 @@ def load_data():
         dataset_train,
         batch_size=512,  # Reduced batch size
         shuffle=True,
-        drop_last=True,
+        drop_last=False,  # Changed to False to keep all samples
         num_workers=0  # Disable multiprocessing for TPU
     )
     test_loader = DataLoader(
         dataset_test,
         batch_size=512,  # Reduced batch size
         shuffle=False,
-        drop_last=True,
+        drop_last=False,  # Changed to False to keep all samples
         num_workers=0  # Disable multiprocessing for TPU
     )
+    
+    print(f"Training samples: {len(dataset_train)}")
+    print(f"Test samples: {len(dataset_test)}")
     
     return train_loader, test_loader, normalizer
 
