@@ -107,7 +107,17 @@ class FeatureNormalizer:
         return seq_norm, cm_norm
         
     def inverse_transform_targets(self, targets):
-        return self.target_scaler.inverse_transform(targets.reshape(-1, 1)).squeeze()
+        # Ensure input is the right shape for inverse transform
+        if isinstance(targets, torch.Tensor):
+            targets = targets.reshape(-1, 1)
+            if targets.device.type != 'cpu':
+                targets = targets.cpu()
+            targets = targets.numpy()
+        else:
+            targets = targets.reshape(-1, 1)
+            
+        # Inverse transform
+        return torch.FloatTensor(self.target_scaler.inverse_transform(targets))
 
 class HuberMSELoss(nn.Module):
     def __init__(self, delta=1.0):
@@ -418,8 +428,13 @@ def validate(model, val_loader, criterion, device, save_predictions=False, save_
     
     # Inverse transform predictions if normalizer is provided
     if normalizer is not None:
-        all_preds = normalizer.inverse_transform_targets(torch.from_numpy(all_preds)).numpy()
-        all_targets = normalizer.inverse_transform_targets(torch.from_numpy(all_targets)).numpy()
+        # Convert numpy arrays to torch tensors for inverse transform
+        all_preds_tensor = torch.from_numpy(all_preds)
+        all_targets_tensor = torch.from_numpy(all_targets)
+        
+        # Inverse transform - now returns torch tensors
+        all_preds = normalizer.inverse_transform_targets(all_preds_tensor).numpy()
+        all_targets = normalizer.inverse_transform_targets(all_targets_tensor).numpy()
     
     # Save predictions if requested
     if save_predictions and save_path:
