@@ -44,7 +44,7 @@ DATA_PATHS = {
 }
 
 class TrainingConfig:
-    def __init__(self, model_type='ensemble'):
+    def __init__(self, model_type='improved'):
         # TPU-optimized parameters
         self.bs = 256  # Further reduced batch size
         self.base_lr = 1e-4  # Reduced learning rate
@@ -570,6 +570,16 @@ def calculate_metrics(targets, predictions):
     }
 
 def train_with_cv(config, train_loader, test_loader, device, normalizer):
+    # Create results directory if it doesn't exist
+    results_dir = "/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results"
+    os.makedirs(results_dir, exist_ok=True)
+    
+    # Create subdirectories for different result types
+    plots_dir = os.path.join(results_dir, f"plots_{config.model_type}")
+    predictions_dir = os.path.join(results_dir, f"predictions_{config.model_type}")
+    os.makedirs(plots_dir, exist_ok=True)
+    os.makedirs(predictions_dir, exist_ok=True)
+    
     kfold = KFold(n_splits=config.num_folds, shuffle=True)
     fold_results = []
     
@@ -644,6 +654,8 @@ def train_with_cv(config, train_loader, test_loader, device, normalizer):
                 patience_counter = 0
                 # Save best model state
                 best_model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+                # Save best model
+                torch.save(best_model_state, os.path.join(results_dir, f'best_model_fold_{fold+1}_{config.model_type}.pt'))
             else:
                 patience_counter += 1
                 print(f"\nNo improvement. Patience: {patience_counter}/{config.patience}")
@@ -660,7 +672,7 @@ def train_with_cv(config, train_loader, test_loader, device, normalizer):
             model.load_state_dict(best_model_state)
         
         # Final evaluation and save predictions
-        predictions_path = f'predictions_fold_{fold+1}.tsv'
+        predictions_path = os.path.join(predictions_dir, f'predictions_fold_{fold+1}.tsv')
         test_metrics = validate(model, test_loader, criterion, device, 
                               save_predictions=True, save_path=predictions_path,
                               normalizer=normalizer)
@@ -672,6 +684,16 @@ def train_with_cv(config, train_loader, test_loader, device, normalizer):
             'history': fold_history,
             'predictions_path': predictions_path
         })
+        
+        # Save fold history
+        history_df = pd.DataFrame({
+            'epoch': range(len(fold_history['train_rmse'])),
+            'train_rmse': fold_history['train_rmse'],
+            'val_rmse': fold_history['val_rmse'],
+            'train_r2': fold_history['train_r2'],
+            'val_r2': fold_history['val_r2']
+        })
+        history_df.to_csv(os.path.join(results_dir, f'history_fold_{fold+1}_{config.model_type}.csv'), index=False)
     
     return fold_results
 
@@ -768,6 +790,11 @@ def main():
 
 def analyze_cv_results(cv_results, config):
     """Enhanced analysis function with additional visualizations."""
+    # Set up results directory
+    results_dir = "/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results"
+    plots_dir = os.path.join(results_dir, f"plots_{config.model_type}")
+    os.makedirs(plots_dir, exist_ok=True)
+    
     # Calculate average metrics across folds
     avg_metrics = {
         'test_rmse': np.mean([r['test_metrics']['rmse'] for r in cv_results]),
@@ -782,6 +809,14 @@ def analyze_cv_results(cv_results, config):
         'best_val_rmse': np.std([r['best_val_rmse'] for r in cv_results])
     }
     
+    # Save summary metrics
+    summary_df = pd.DataFrame({
+        'Metric': ['Test RMSE', 'Test R²', 'Best Val RMSE'],
+        'Mean': [avg_metrics['test_rmse'], avg_metrics['test_r2'], avg_metrics['best_val_rmse']],
+        'Std': [std_metrics['test_rmse'], std_metrics['test_r2'], std_metrics['best_val_rmse']]
+    })
+    summary_df.to_csv(os.path.join(results_dir, f'summary_metrics_{config.model_type}.csv'), index=False)
+    
     # Print summary
     print("\nCross-Validation Results Summary:")
     print(f"Average Test RMSE: {avg_metrics['test_rmse']:.4f} ± {std_metrics['test_rmse']:.4f}")
@@ -789,11 +824,7 @@ def analyze_cv_results(cv_results, config):
     print(f"Average Best Validation RMSE: {avg_metrics['best_val_rmse']:.4f} ± {std_metrics['best_val_rmse']:.4f}")
     
     # Plot learning curves for each fold
-    plot_cv_learning_curves(cv_results, config)
-    
-    # Create prediction analysis plots for each fold
-    plot_dir = "model_analysis_plots"
-    os.makedirs(plot_dir, exist_ok=True)
+    plot_cv_learning_curves(cv_results, config, plots_dir)
     
     # Plot predictions for each fold
     for result in cv_results:
@@ -802,13 +833,13 @@ def analyze_cv_results(cv_results, config):
             plot_prediction_analysis(
                 DATA_PATHS['test_data'],
                 result['predictions_path'],
-                plot_dir,
+                plots_dir,
                 f'fold_{fold_num}'
             )
             
-    print("\nAnalysis completed. Plots saved in 'model_analysis_plots' directory.")
+    print(f"\nAnalysis completed. Results saved in '{results_dir}'")
 
-def plot_cv_learning_curves(cv_results, config):
+def plot_cv_learning_curves(cv_results, config, plots_dir):
     plt.figure(figsize=(15, 10))
     
     # Plot RMSE
@@ -822,7 +853,7 @@ def plot_cv_learning_curves(cv_results, config):
                 alpha=0.3)
     plt.xlabel('Epoch')
     plt.ylabel('RMSE')
-    plt.title('RMSE Learning Curves Across Folds')
+    plt.title(f'RMSE Learning Curves Across Folds ({config.model_type})')
     plt.legend()
     
     # Plot R²
@@ -836,11 +867,11 @@ def plot_cv_learning_curves(cv_results, config):
                 alpha=0.3)
     plt.xlabel('Epoch')
     plt.ylabel('R²')
-    plt.title('R² Learning Curves Across Folds')
+    plt.title(f'R² Learning Curves Across Folds ({config.model_type})')
     plt.legend()
     
     plt.tight_layout()
-    plt.savefig('cv_learning_curves.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(plots_dir, f'learning_curves_{config.model_type}.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
 def plot_prediction_analysis(experimental_path, predicted_path, plot_dir, model_type):
