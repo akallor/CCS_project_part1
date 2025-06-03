@@ -978,14 +978,25 @@ def analyze_cv_results(cv_results, config):
         
         # Save summary metrics for each model type
         for model_type in avg_metrics.keys():
-            summary_df = pd.DataFrame({
-                'Metric': ['Test RMSE', 'Test R²', 'Best Val RMSE'] if model_type != 'combined' else ['Test RMSE', 'Test R²'],
-                'Mean': [avg_metrics[model_type]['test_rmse'], 
+            if model_type == 'combined':
+                metrics = ['Test RMSE', 'Test R²']
+                means = [avg_metrics[model_type]['test_rmse'], 
+                        avg_metrics[model_type]['test_r2']]
+                stds = [std_metrics[model_type]['test_rmse'],
+                       std_metrics[model_type]['test_r2']]
+            else:
+                metrics = ['Test RMSE', 'Test R²', 'Best Val RMSE']
+                means = [avg_metrics[model_type]['test_rmse'], 
                         avg_metrics[model_type]['test_r2'],
-                        avg_metrics[model_type].get('best_val_rmse', np.nan)],
-                'Std': [std_metrics[model_type]['test_rmse'],
+                        avg_metrics[model_type]['best_val_rmse']]
+                stds = [std_metrics[model_type]['test_rmse'],
                        std_metrics[model_type]['test_r2'],
-                       std_metrics[model_type].get('best_val_rmse', np.nan)]
+                       std_metrics[model_type]['best_val_rmse']]
+            
+            summary_df = pd.DataFrame({
+                'Metric': metrics,
+                'Mean': means,
+                'Std': stds
             })
             summary_df.to_csv(os.path.join(results_dir, f'summary_metrics_{model_type}.csv'), index=False)
         
@@ -1013,10 +1024,14 @@ def analyze_cv_results(cv_results, config):
         }
         
         # Save summary metrics
+        metrics = ['Test RMSE', 'Test R²', 'Best Val RMSE']
+        means = [avg_metrics['test_rmse'], avg_metrics['test_r2'], avg_metrics['best_val_rmse']]
+        stds = [std_metrics['test_rmse'], std_metrics['test_r2'], std_metrics['best_val_rmse']]
+        
         summary_df = pd.DataFrame({
-            'Metric': ['Test RMSE', 'Test R²', 'Best Val RMSE'],
-            'Mean': [avg_metrics['test_rmse'], avg_metrics['test_r2'], avg_metrics['best_val_rmse']],
-            'Std': [std_metrics['test_rmse'], std_metrics['test_r2'], std_metrics['best_val_rmse']]
+            'Metric': metrics,
+            'Mean': means,
+            'Std': stds
         })
         summary_df.to_csv(os.path.join(results_dir, f'summary_metrics_{config.model_type}.csv'), index=False)
         
