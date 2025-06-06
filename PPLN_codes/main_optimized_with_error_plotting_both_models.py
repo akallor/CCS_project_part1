@@ -44,7 +44,7 @@ DATA_PATHS = {
 }
 
 class TrainingConfig:
-    def __init__(self, model_type='both'):
+    def __init__(self, model_type='improved'):
         # TPU-optimized parameters
         self.bs = 256  # Further reduced batch size
         self.base_lr = 1e-4  # Reduced learning rate
@@ -816,7 +816,9 @@ def initialize_fold_history(model_type):
                 'train_r2': [],
                 'val_r2': [],
                 'train_loss': [],
-                'val_loss': []
+                'val_loss': [],
+                'train_evs': [],  # Added explained variance
+                'val_evs': []     # Added explained variance
             },
             'ensemble': {
                 'train_rmse': [],
@@ -824,12 +826,15 @@ def initialize_fold_history(model_type):
                 'train_r2': [],
                 'val_r2': [],
                 'train_loss': [],
-                'val_loss': []
+                'val_loss': [],
+                'train_evs': [],  # Added explained variance
+                'val_evs': []     # Added explained variance
             },
             'combined': {
                 'val_rmse': [],
                 'val_r2': [],
-                'val_loss': []
+                'val_loss': [],
+                'val_evs': []     # Added explained variance
             }
         }
     return {
@@ -838,7 +843,9 @@ def initialize_fold_history(model_type):
         'train_r2': [],
         'val_r2': [],
         'train_loss': [],
-        'val_loss': []
+        'val_loss': [],
+        'train_evs': [],  # Added explained variance
+        'val_evs': []     # Added explained variance
     }
 
 def update_fold_history(history, train_metrics, val_metrics, model_type):
@@ -853,12 +860,15 @@ def update_fold_history(history, train_metrics, val_metrics, model_type):
                 history[model_key]['val_r2'].append(val_metrics[model_key]['r2'])
                 history[model_key]['train_loss'].append(train_metrics[model_key]['loss'])
                 history[model_key]['val_loss'].append(val_metrics[model_key]['loss'])
+                history[model_key]['train_evs'].append(train_metrics[model_key]['evs'])  # Added explained variance
+                history[model_key]['val_evs'].append(val_metrics[model_key]['evs'])      # Added explained variance
         
         # Update combined metrics if available
         if 'combined' in val_metrics:
             history['combined']['val_rmse'].append(val_metrics['combined']['rmse'])
             history['combined']['val_r2'].append(val_metrics['combined']['r2'])
             history['combined']['val_loss'].append(val_metrics['combined']['loss'])
+            history['combined']['val_evs'].append(val_metrics['combined']['evs'])  # Added explained variance
     else:
         # Update metrics for single model
         history['train_rmse'].append(train_metrics['rmse'])
@@ -867,6 +877,8 @@ def update_fold_history(history, train_metrics, val_metrics, model_type):
         history['val_r2'].append(val_metrics['r2'])
         history['train_loss'].append(train_metrics['loss'])
         history['val_loss'].append(val_metrics['loss'])
+        history['train_evs'].append(train_metrics['evs'])  # Added explained variance
+        history['val_evs'].append(val_metrics['evs'])      # Added explained variance
 
 def get_validation_rmse(val_metrics, model_type):
     if model_type == 'both':
@@ -1044,6 +1056,7 @@ def analyze_cv_results(cv_results, config):
     # Plot learning curves for each fold
     try:
         plot_cv_learning_curves(cv_results, config, plots_dir)
+        plot_explained_variance_curves(cv_results, config, plots_dir)  # Added explained variance plots
     except Exception as e:
         print(f"Warning: Could not plot learning curves: {str(e)}")
     
@@ -1156,6 +1169,185 @@ def plot_cv_learning_curves(cv_results, config, plots_dir):
         plt.savefig(os.path.join(plots_dir, f'learning_curves_{config.model_type}.png'), dpi=300, bbox_inches='tight')
         plt.close()
 
+def plot_explained_variance_curves(cv_results, config, plots_dir):
+    """Plot explained variance learning curves with proper handling of both model types."""
+    if config.model_type == 'both':
+        for model_type in ['improved', 'ensemble']:
+            plt.figure(figsize=(10, 6))
+            
+            # Plot explained variance
+            for fold_idx, result in enumerate(cv_results):
+                history = result['history'][model_type]
+                plt.plot(history['train_evs'], 
+                        label=f'Fold {fold_idx+1} Train',
+                        alpha=0.3)
+                plt.plot(history['val_evs'],
+                        label=f'Fold {fold_idx+1} Val',
+                        alpha=0.3)
+            
+            plt.xlabel('Epoch')
+            plt.ylabel('Explained Variance Score')
+            plt.title(f'Explained Variance Learning Curves ({model_type})')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            # Add mean curves
+            mean_train_evs = np.mean([result['history'][model_type]['train_evs'] 
+                                    for result in cv_results], axis=0)
+            mean_val_evs = np.mean([result['history'][model_type]['val_evs'] 
+                                  for result in cv_results], axis=0)
+            
+            plt.plot(mean_train_evs, 'b-', linewidth=2, label='Mean Train EVS')
+            plt.plot(mean_val_evs, 'r-', linewidth=2, label='Mean Val EVS')
+            
+            plt.legend()
+            sns.despine()
+            plt.tight_layout()
+            plt.savefig(os.path.join(plots_dir, f'explained_variance_curves_{model_type}.png'), dpi=300)
+            plt.close()
+            
+        # Plot combined model metrics if available
+        if any('combined' in r['history'] for r in cv_results):
+            plt.figure(figsize=(10, 6))
+            for fold_idx, result in enumerate(cv_results):
+                if 'combined' in result['history']:
+                    plt.plot(result['history']['combined']['val_evs'],
+                            label=f'Fold {fold_idx+1} Val EVS',
+                            alpha=0.3)
+            
+            # Add mean curve
+            mean_combined_evs = np.mean([result['history']['combined']['val_evs'] 
+                                       for result in cv_results 
+                                       if 'combined' in result['history']], axis=0)
+            plt.plot(mean_combined_evs, 'r-', linewidth=2, label='Mean Combined EVS')
+            
+            plt.xlabel('Epoch')
+            plt.ylabel('Explained Variance Score')
+            plt.title('Combined Model Explained Variance')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            sns.despine()
+            plt.tight_layout()
+            plt.savefig(os.path.join(plots_dir, 'explained_variance_curves_combined.png'), dpi=300)
+            plt.close()
+    else:
+        plt.figure(figsize=(10, 6))
+        
+        # Plot explained variance
+        for fold_idx, result in enumerate(cv_results):
+            plt.plot(result['history']['train_evs'], 
+                    label=f'Fold {fold_idx+1} Train',
+                    alpha=0.3)
+            plt.plot(result['history']['val_evs'],
+                    label=f'Fold {fold_idx+1} Val',
+                    alpha=0.3)
+        
+        # Add mean curves
+        mean_train_evs = np.mean([result['history']['train_evs'] for result in cv_results], axis=0)
+        mean_val_evs = np.mean([result['history']['val_evs'] for result in cv_results], axis=0)
+        
+        plt.plot(mean_train_evs, 'b-', linewidth=2, label='Mean Train EVS')
+        plt.plot(mean_val_evs, 'r-', linewidth=2, label='Mean Val EVS')
+        
+        plt.xlabel('Epoch')
+        plt.ylabel('Explained Variance Score')
+        plt.title(f'Explained Variance Learning Curves ({config.model_type})')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        sns.despine()
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, f'explained_variance_curves_{config.model_type}.png'), dpi=300)
+        plt.close()
+
+def plot_residuals_vs_predicted(df, plot_dir, model_type):
+    """Create residual plot against predicted values."""
+    df['Residuals'] = df['CCS_Predicted'] - df['CCS_Experimental']
+    
+    # Calculate statistics
+    mean_residual = df['Residuals'].mean()
+    std_residual = df['Residuals'].std()
+    max_residual = df['Residuals'].max()
+    min_residual = df['Residuals'].min()
+    
+    plt.figure(figsize=(10, 8))
+    sns.scatterplot(x=df['CCS_Predicted'], y=df['Residuals'], color='black')
+    plt.axhline(0, color='red', linestyle='--', label='Zero line')
+    plt.axhline(mean_residual, color='blue', linestyle='--', label='Mean residual')
+    
+    plt.xlabel('Predicted CCS')
+    plt.ylabel('Residuals (Predicted - Experimental)')
+    plt.title(f'Residual vs Predicted Plot: {model_type}')
+    
+    # Add statistics box
+    stats_text = (f"Mean = {mean_residual:.3f}\n"
+                 f"Std Dev = {std_residual:.3f}\n"
+                 f"Max = {max_residual:.3f}\n"
+                 f"Min = {min_residual:.3f}")
+    plt.text(0.05, 0.95, stats_text,
+             ha='left', va='top', transform=plt.gca().transAxes,
+             bbox=dict(facecolor='white', edgecolor='black', alpha=0.8))
+    
+    plt.grid(True, alpha=0.3)
+    sns.despine()
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(plot_dir, f'residuals_vs_predicted_{model_type}.png'), dpi=400)
+    plt.close()
+
+def plot_overlapping_residuals(df, plot_dir, model_type):
+    """Create overlapping residual plots for both experimental and predicted values."""
+    df['Residuals'] = df['CCS_Predicted'] - df['CCS_Experimental']
+    
+    # Calculate statistics
+    mean_residual = df['Residuals'].mean()
+    std_residual = df['Residuals'].std()
+    max_residual = df['Residuals'].max()
+    min_residual = df['Residuals'].min()
+    skewness = df['Residuals'].skew()
+    kurtosis = df['Residuals'].kurtosis()
+    
+    plt.figure(figsize=(15, 6))
+    
+    # Left subplot for scatter
+    plt.subplot(1, 2, 1)
+    sns.scatterplot(x=df['CCS_Experimental'], y=df['Residuals'], color='blue', alpha=0.5, label='vs Experimental')
+    sns.scatterplot(x=df['CCS_Predicted'], y=df['Residuals'], color='black', alpha=0.5, label='vs Predicted')
+    plt.axhline(0, color='red', linestyle='--', label='Zero line')
+    plt.axhline(mean_residual, color='green', linestyle='--', label='Mean residual')
+    plt.xlabel('CCS Value')
+    plt.ylabel('Residuals (Predicted - Experimental)')
+    plt.title(f'Overlapping Residual Plots: {model_type}')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    # Right subplot for distributions
+    plt.subplot(1, 2, 2)
+    sns.kdeplot(data=df, x='Residuals', color='lightblue', fill=True, alpha=0.5, label='Distribution')
+    plt.axvline(0, color='red', linestyle='--', label='Zero line')
+    plt.axvline(mean_residual, color='green', linestyle='--', label='Mean')
+    plt.xlabel('Residuals (Predicted - Experimental)')
+    plt.title(f'Residual Distribution: {model_type}')
+    
+    # Add comprehensive statistics box
+    stats_text = (f"Distribution Statistics:\n"
+                 f"Mean = {mean_residual:.3f}\n"
+                 f"Std Dev = {std_residual:.3f}\n"
+                 f"Max = {max_residual:.3f}\n"
+                 f"Min = {min_residual:.3f}\n"
+                 f"Skewness = {skewness:.3f}\n"
+                 f"Kurtosis = {kurtosis:.3f}")
+    plt.text(0.95, 0.95, stats_text,
+             ha='right', va='top', transform=plt.gca().transAxes,
+             bbox=dict(facecolor='white', edgecolor='black', alpha=0.8))
+    
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    sns.despine()
+    plt.tight_layout()
+    plt.savefig(os.path.join(plot_dir, f'overlapping_residuals_{model_type}.png'), dpi=400)
+    plt.close()
+
 def plot_prediction_analysis(experimental_path, predicted_path, plot_dir, model_type):
     """
     Create comprehensive prediction analysis plots including scatter plots,
@@ -1190,6 +1382,8 @@ def plot_prediction_analysis(experimental_path, predicted_path, plot_dir, model_
     # Create all plots
     plot_scatter_with_regression(df, plot_dir, model_type)
     plot_residuals(df, plot_dir, model_type)
+    plot_residuals_vs_predicted(df, plot_dir, model_type)
+    plot_overlapping_residuals(df, plot_dir, model_type)
     plot_calibration_curve(df, plot_dir, model_type)
     plot_residual_distribution(df, plot_dir, model_type)
 
@@ -1208,14 +1402,17 @@ def plot_scatter_with_regression(df, plot_dir, model_type):
     r2 = r2_score(y, model.predict(X))
     mae = mean_absolute_error(y, model.predict(X))
     rmse = np.sqrt(mean_squared_error(y, model.predict(X)))
+    evs = explained_variance_score(y, model.predict(X))
+    slope = model.coef_[0]
+    intercept = model.intercept_
     
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(10, 8))
     
     # Scatter points
     plt.scatter(df["CCS_Experimental"], df["CCS_Predicted"], color='black', s=10, label='Data')
     
     # Regression line
-    plt.plot(x_range, y_pred_line, color='red', label='Regression line')
+    plt.plot(x_range, y_pred_line, color='red', label=f'Regression line (y = {slope:.3f}x + {intercept:.3f})')
     
     # Identity line
     min_val = min(df["CCS_Experimental"].min(), df["CCS_Predicted"].min())
@@ -1229,10 +1426,19 @@ def plot_scatter_with_regression(df, plot_dir, model_type):
     plt.xlabel("Experimental CCS")
     plt.ylabel("Predicted CCS")
     plt.title(f"Predicted vs Experimental CCS ({model_type})")
-    plt.text(0.95, 0.05, f"R² = {r2:.3f}\nRMSE = {rmse:.3f}\nMAE = {mae:.3f}",
-             ha='right', va='bottom', transform=plt.gca().transAxes,
-             bbox=dict(facecolor='white', edgecolor='black'))
     
+    # Add statistics box
+    stats_text = (f"R² = {r2:.3f}\n"
+                 f"RMSE = {rmse:.3f}\n"
+                 f"MAE = {mae:.3f}\n"
+                 f"EVS = {evs:.3f}\n"
+                 f"Slope = {slope:.3f}\n"
+                 f"Intercept = {intercept:.3f}")
+    plt.text(0.05, 0.95, stats_text,
+             ha='left', va='top', transform=plt.gca().transAxes,
+             bbox=dict(facecolor='white', edgecolor='black', alpha=0.8))
+    
+    plt.grid(True, alpha=0.3)
     sns.despine()
     plt.legend()
     plt.tight_layout()
@@ -1245,37 +1451,70 @@ def plot_residuals(df, plot_dir, model_type):
     """Create residual plot."""
     df['Residuals'] = df['CCS_Predicted'] - df['CCS_Experimental']
     
-    plt.figure(figsize=(8, 6))
+    # Calculate statistics
+    mean_residual = df['Residuals'].mean()
+    std_residual = df['Residuals'].std()
+    max_residual = df['Residuals'].max()
+    min_residual = df['Residuals'].min()
+    
+    plt.figure(figsize=(10, 8))
     sns.scatterplot(x=df['CCS_Experimental'], y=df['Residuals'], color='black')
-    plt.axhline(0, color='red', linestyle='--')
+    plt.axhline(0, color='red', linestyle='--', label='Zero line')
+    plt.axhline(mean_residual, color='blue', linestyle='--', label='Mean residual')
+    
     plt.xlabel('Experimental CCS')
     plt.ylabel('Residuals (Predicted - Experimental)')
     plt.title(f'Residual Plot: {model_type}')
     
+    # Add statistics box
+    stats_text = (f"Mean = {mean_residual:.3f}\n"
+                 f"Std Dev = {std_residual:.3f}\n"
+                 f"Max = {max_residual:.3f}\n"
+                 f"Min = {min_residual:.3f}")
+    plt.text(0.05, 0.95, stats_text,
+             ha='left', va='top', transform=plt.gca().transAxes,
+             bbox=dict(facecolor='white', edgecolor='black', alpha=0.8))
+    
+    plt.grid(True, alpha=0.3)
     sns.despine()
+    plt.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(plot_dir, f'residuals_{model_type}.png'), dpi=400)
     plt.close()
 
 def plot_calibration_curve(df, plot_dir, model_type):
     """Create calibration curve."""
-    plt.figure(figsize=(8, 6))
-    sns.scatterplot(x=df['CCS_Experimental'], y=df['CCS_Predicted'], color='black')
-    plt.plot([df['CCS_Experimental'].min(), df['CCS_Experimental'].max()],
-             [df['CCS_Experimental'].min(), df['CCS_Experimental'].max()],
-             color='red', linestyle='--')
-    
+    # Calculate statistics
     r2 = r2_score(df['CCS_Experimental'], df['CCS_Predicted'])
     mae = mean_absolute_error(df['CCS_Experimental'], df['CCS_Predicted'])
+    rmse = np.sqrt(mean_squared_error(df['CCS_Experimental'], df['CCS_Predicted']))
+    evs = explained_variance_score(df['CCS_Experimental'], df['CCS_Predicted'])
+    
+    plt.figure(figsize=(10, 8))
+    sns.scatterplot(x=df['CCS_Experimental'], y=df['CCS_Predicted'], color='black')
+    
+    # Add identity line
+    min_val = min(df['CCS_Experimental'].min(), df['CCS_Predicted'].min())
+    max_val = max(df['CCS_Experimental'].max(), df['CCS_Predicted'].max())
+    plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--', label='Identity line')
     
     plt.xlabel('Experimental CCS')
     plt.ylabel('Predicted CCS')
     plt.title(f'Calibration Curve: {model_type}')
-    plt.text(0.05, 0.95, f"R² = {r2:.3f}\nMAE = {mae:.3f}",
-             ha='left', va='top', transform=plt.gca().transAxes,
-             bbox=dict(facecolor='white', edgecolor='black'))
     
+    # Add statistics box
+    stats_text = (f"Model Performance:\n"
+                 f"R² = {r2:.3f}\n"
+                 f"RMSE = {rmse:.3f}\n"
+                 f"MAE = {mae:.3f}\n"
+                 f"EVS = {evs:.3f}")
+    plt.text(0.05, 0.95, stats_text,
+             ha='left', va='top', transform=plt.gca().transAxes,
+             bbox=dict(facecolor='white', edgecolor='black', alpha=0.8))
+    
+    plt.grid(True, alpha=0.3)
     sns.despine()
+    plt.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(plot_dir, f'calibration_{model_type}.png'), dpi=400)
     plt.close()
@@ -1284,20 +1523,43 @@ def plot_residual_distribution(df, plot_dir, model_type):
     """Create residual distribution plot."""
     df['Residuals'] = df['CCS_Predicted'] - df['CCS_Experimental']
     
-    plt.figure(figsize=(8, 6))
-    sns.histplot(df['Residuals'], bins=30, kde=True, color='gray')
-    plt.axvline(0, color='red', linestyle='--')
-    plt.xlabel('Residuals (Predicted - Experimental)')
-    plt.title(f'Distribution of Residuals: {model_type}')
-    
-    # Add mean and std annotations
+    # Calculate comprehensive statistics
     mean_residual = df['Residuals'].mean()
     std_residual = df['Residuals'].std()
-    plt.text(0.95, 0.95, f"Mean = {mean_residual:.3f}\nStd = {std_residual:.3f}",
-             ha='right', va='top', transform=plt.gca().transAxes,
-             bbox=dict(facecolor='white', edgecolor='black'))
+    median_residual = df['Residuals'].median()
+    skewness = df['Residuals'].skew()
+    kurtosis = df['Residuals'].kurtosis()
+    q1 = df['Residuals'].quantile(0.25)
+    q3 = df['Residuals'].quantile(0.75)
+    iqr = q3 - q1
     
+    plt.figure(figsize=(10, 8))
+    sns.histplot(df['Residuals'], bins=30, kde=True, color='gray')
+    plt.axvline(0, color='red', linestyle='--', label='Zero line')
+    plt.axvline(mean_residual, color='blue', linestyle='--', label='Mean')
+    plt.axvline(median_residual, color='green', linestyle='--', label='Median')
+    
+    plt.xlabel('Residuals (Predicted - Experimental)')
+    plt.ylabel('Count')
+    plt.title(f'Distribution of Residuals: {model_type}')
+    
+    # Add comprehensive statistics box
+    stats_text = (f"Distribution Statistics:\n"
+                 f"Mean = {mean_residual:.3f}\n"
+                 f"Median = {median_residual:.3f}\n"
+                 f"Std Dev = {std_residual:.3f}\n"
+                 f"Skewness = {skewness:.3f}\n"
+                 f"Kurtosis = {kurtosis:.3f}\n"
+                 f"Q1 = {q1:.3f}\n"
+                 f"Q3 = {q3:.3f}\n"
+                 f"IQR = {iqr:.3f}")
+    plt.text(0.95, 0.95, stats_text,
+             ha='right', va='top', transform=plt.gca().transAxes,
+             bbox=dict(facecolor='white', edgecolor='black', alpha=0.8))
+    
+    plt.grid(True, alpha=0.3)
     sns.despine()
+    plt.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(plot_dir, f'residual_distribution_{model_type}.png'), dpi=400)
     plt.close()
