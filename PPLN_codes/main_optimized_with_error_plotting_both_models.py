@@ -36,15 +36,15 @@ np.set_printoptions(threshold=np.inf)
 
 # Data paths
 DATA_PATHS = {
-    'train_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/train_1.tsv',
-    'test_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/test_1.tsv',
-    'train_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results/sequenceTensor_mhcI_train_a1000b1gamma0.pt',
-    'test_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results/sequenceTensor_mhcI_test_a1000b1gamma0.pt',
-    'results': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results'
+    'train_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/train_1_new.tsv',
+    'test_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/test_1_new.tsv',
+    'train_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_trainnewdata_a1000b1gamma0.pt',
+    'test_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_testnewdata_a1000b1gamma0.pt',
+    'results': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results_120625'
 }
 
 class TrainingConfig:
-    def __init__(self, model_type='improved'):
+    def __init__(self, model_type='ensemble'):
         # TPU-optimized parameters
         self.bs = 256  # Further reduced batch size
         self.base_lr = 1e-4  # Reduced learning rate
