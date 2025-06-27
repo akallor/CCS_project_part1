@@ -1,15 +1,62 @@
 import pandas as pd
 import numpy as np
+import re
 from sklearn.model_selection import train_test_split
+
+def clean_peptide_sequence(sequence):
+    """
+    Clean peptide sequence by removing special characters and PTM indicators.
+    
+    Parameters:
+    sequence : str - Raw peptide sequence that may contain PTM indicators
+    
+    Returns:
+    str - Cleaned peptide sequence containing only amino acid letters
+    """
+    if pd.isna(sequence):
+        return sequence
+    
+    # Convert to string if not already
+    sequence = str(sequence)
+    
+    # Remove PTM indicators like (+15), (-16), etc.
+    # This regex matches patterns like (+15), (-16), (+80), etc.
+    sequence = re.sub(r'\(\+?\d+\)', '', sequence)
+    
+    # Remove other common PTM indicators
+    # Remove oxidation indicators like [ox], [O], etc.
+    sequence = re.sub(r'\[ox\]|\[O\]', '', sequence, flags=re.IGNORECASE)
+    
+    # Remove phosphorylation indicators like [phos], [P], etc.
+    sequence = re.sub(r'\[phos\]|\[P\]', '', sequence, flags=re.IGNORECASE)
+    
+    # Remove acetylation indicators like [ac], [Ac], etc.
+    sequence = re.sub(r'\[ac\]|\[Ac\]', '', sequence, flags=re.IGNORECASE)
+    
+    # Remove methylation indicators like [me], [Me], etc.
+    sequence = re.sub(r'\[me\]|\[Me\]', '', sequence, flags=re.IGNORECASE)
+    
+    # Remove any remaining brackets and their contents
+    sequence = re.sub(r'\[.*?\]', '', sequence)
+    
+    # Remove any remaining parentheses and their contents
+    sequence = re.sub(r'\(.*?\)', '', sequence)
+    
+    # Remove any non-letter characters (keeping only A-Z, a-z)
+    sequence = re.sub(r'[^A-Za-z]', '', sequence)
+    
+    # Convert to uppercase for consistency
+    sequence = sequence.upper()
+    
+    return sequence
 
 # Load the data
 print("Loading data...")
-train_data = pd.read_csv("/content/drive/MyDrive/Colab_CCS_results/MHC_1/combined_mhc_final_data.tsv", 
+train_data = pd.read_csv("/content/drive/MyDrive/Colab_CCS_results/MHC_1/New_data_jun2025/combined_mhc_final_data.tsv", 
                         sep='\t')
 
-#Filter out for MHC-I or II based on requirement
-
-train_data = train_data[train_data.Length <= 12]
+# Filter out for MHC-I or II based on requirement
+train_data = train_data[(train_data.Length <= 12) & (train_data.z_estimated == 1)]
 
 print(f"Original data shape: {train_data.shape}")
 
@@ -62,9 +109,32 @@ required_columns = ['Dataset', 'Peptide', 'invK0', 'z_estimated', 'Mass']
 data_subset = train_data[required_columns].copy()
 data_subset = data_subset.rename(columns = {'z_estimated':'Charge'})
 
+# Clean peptide sequences
+print("Cleaning peptide sequences...")
+data_subset['Peptide_Clean'] = data_subset['Peptide'].apply(clean_peptide_sequence)
+
+# Show some examples of cleaned sequences
+print("\nExamples of peptide sequence cleaning:")
+sample_data = data_subset[['Peptide', 'Peptide_Clean']].head(10)
+for idx, row in sample_data.iterrows():
+    if row['Peptide'] != row['Peptide_Clean']:
+        print(f"Original: {row['Peptide']} -> Cleaned: {row['Peptide_Clean']}")
+
+# Replace the original Peptide column with cleaned version
+data_subset['Peptide'] = data_subset['Peptide_Clean']
+data_subset = data_subset.drop('Peptide_Clean', axis=1)
+
 # Remove rows with missing values
 data_subset = data_subset.dropna()
 print(f"Data shape after removing NaN: {data_subset.shape}")
+
+# Remove rows with empty peptide sequences after cleaning
+empty_sequences = data_subset['Peptide'].str.len() == 0
+if empty_sequences.any():
+    print(f"Warning: Found {empty_sequences.sum()} empty peptide sequences after cleaning. Removing them.")
+    data_subset = data_subset[~empty_sequences]
+
+print(f"Data shape after removing empty sequences: {data_subset.shape}")
 
 # Handle duplicate sequences
 print("Handling duplicate sequences...")
@@ -113,13 +183,13 @@ output_columns = ['Dataset', 'Peptide', 'CCS_Experimental', 'Charge', 'Mass']
 # Save the splits
 print("Saving train and test sets...")
 train_data_split[output_columns].to_csv(
-    "/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/train_1_new.tsv", 
+    "/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/train_1_new_charge1.tsv", 
     sep='\t', 
     index=False
 )
 
 test_data_split[output_columns].to_csv(
-    "/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/test_1_new.tsv", 
+    "/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/test_1_new_charge1.tsv", 
     sep='\t', 
     index=False
 )
@@ -137,4 +207,8 @@ print(train_data_split['Charge'].value_counts().sort_index())
 print(f"\nCharge distribution in test set:")
 print(test_data_split['Charge'].value_counts().sort_index())
 
-print("\nSplit completed successfully!")
+# Show some examples of final cleaned sequences
+print(f"\nExamples of final cleaned peptide sequences:")
+print(train_data_split['Peptide'].head(10).tolist())
+
+print("\nSplit completed successfully!") 
