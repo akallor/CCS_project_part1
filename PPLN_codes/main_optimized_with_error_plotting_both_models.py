@@ -36,11 +36,11 @@ np.set_printoptions(threshold=np.inf)
 
 # Data paths
 DATA_PATHS = {
-    'train_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/train_1_new.tsv',
-    'test_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/test_1_new.tsv',
-    'train_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_trainnewdata_a1000b1gamma0.pt',
-    'test_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_testnewdata_a1000b1gamma0.pt',
-    'results': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results_120625'
+    'train_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/train_1_new_charge2.tsv',
+    'test_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/test_1_new_charge2.tsv',
+    'train_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_trainnewdata_charge2a1000b1gamma0.pt',
+    'test_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_testnewdata_charge2a1000b1gamma0.pt',
+    'results': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results_290625'
 }
 
 class TrainingConfig:
