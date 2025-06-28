@@ -14,8 +14,8 @@ import numpy as np
 
 # parameters
 #data_path = './data.csv'    # path to csv file
-data_path = '/content/CCS_project_part1/processed_data/immunopeptide_data_JPST002044.tsv'
-column_idx = 0             # column index of sequence data in csv file
+data_path = '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/train_1_new_charge2.tsv'
+column_idx = 1             # column index of sequence data in csv file
 a = 1000                    # parameter for positional encoding
 b = 1                       # parameter for positional encoding
 gamma = 0                   # parameter for positional encoding
@@ -84,4 +84,4 @@ for itr in range(nIteration):
 sequence_representations = []
 for itr in range(nIteration):
     sequence_representations.extend(torch.load('sequenceTensor'+str(itr+1)+'.pt'))
-torch.save(sequence_representations, 'sequenceTensor_a'+str(a)+'b'+str(b)+'gamma'+str(gamma)+'.pt')
+torch.save(sequence_representations, '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_trainnewdata_charge2a'+str(a)+'b'+str(b)+'gamma'+str(gamma)+'.pt')
