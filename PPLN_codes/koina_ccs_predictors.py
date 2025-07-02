@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import argparse
 import sys
+import re
 from pathlib import Path
 
 # If you get a ModuleNotFound error install koinapy with `pip install koinapy`.
@@ -10,6 +11,30 @@ try:
 except ImportError:
     print("Error: koinapy not found. Please install it with: pip install koinapy")
     sys.exit(1)
+
+def clean_peptide_sequence(sequence):
+    """
+    Clean peptide sequence by removing all non-alphabetic characters.
+    
+    Parameters:
+    sequence : str - Raw peptide sequence that may contain PTM indicators
+    
+    Returns:
+    str - Cleaned peptide sequence containing only alphabetic characters
+    """
+    if pd.isna(sequence):
+        return sequence
+    
+    # Convert to string if not already
+    sequence = str(sequence)
+    
+    # Remove all non-alphabetic characters (keeping only A-Z, a-z)
+    sequence = re.sub(r'[^A-Za-z]', '', sequence)
+    
+    # Convert to uppercase for consistency
+    sequence = sequence.upper()
+    
+    return sequence
 
 def validate_input_file(file_path):
     """
@@ -27,6 +52,8 @@ def validate_input_file(file_path):
     # Load the TSV file
     try:
         data = pd.read_csv(file_path, sep='\t')
+        data = data.rename(columns = {'Peptide':'peptide_sequences',
+        'Charge':'precursor_charges'})
     except Exception as e:
         raise ValueError(f"Error reading TSV file: {e}")
     
@@ -49,6 +76,29 @@ def validate_input_file(file_path):
     
     if data.empty:
         raise ValueError("No valid data remaining after removing missing values")
+    
+    # Clean peptide sequences
+    print("Cleaning peptide sequences...")
+    data['peptide_sequences_original'] = data['peptide_sequences'].copy()
+    data['peptide_sequences'] = data['peptide_sequences'].apply(clean_peptide_sequence)
+    
+    # Show some examples of cleaned sequences
+    print("\nExamples of peptide sequence cleaning:")
+    sample_data = data[['peptide_sequences_original', 'peptide_sequences']].head(10)
+    for idx, row in sample_data.iterrows():
+        if row['peptide_sequences_original'] != row['peptide_sequences']:
+            print(f"Original: {row['peptide_sequences_original']} -> Cleaned: {row['peptide_sequences']}")
+    
+    # Remove rows with empty peptide sequences after cleaning
+    empty_sequences = data['peptide_sequences'].str.len() == 0
+    if empty_sequences.any():
+        print(f"Warning: Found {empty_sequences.sum()} empty peptide sequences after cleaning. Removing them.")
+        data = data[~empty_sequences]
+    
+    if data.empty:
+        raise ValueError("No valid data remaining after cleaning sequences")
+    
+    print(f"Final data shape after cleaning: {data.shape}")
     
     return data
 
@@ -101,6 +151,14 @@ def save_predictions(predictions, output_file, input_data):
         # Add prediction columns
         for col in predictions.columns:
             result_df[f'predicted_{col}'] = predictions[col].values
+        
+        # Reorganize columns to show original and cleaned sequences
+        if 'peptide_sequences_original' in result_df.columns:
+            # Reorder columns to show original, cleaned, then predictions
+            cols = ['peptide_sequences_original', 'peptide_sequences', 'precursor_charges']
+            pred_cols = [col for col in result_df.columns if col.startswith('predicted_')]
+            other_cols = [col for col in result_df.columns if col not in cols + pred_cols]
+            result_df = result_df[cols + other_cols + pred_cols]
         
         # Save to TSV
         result_df.to_csv(output_file, sep='\t', index=False)
