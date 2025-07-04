@@ -12,6 +12,7 @@ Usage:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -22,6 +23,150 @@ import os
 import csv
 import warnings
 warnings.filterwarnings('ignore')
+
+# Model classes from shap_attention_analyzer.py
+class SEBlock(nn.Module):
+    def __init__(self, channel, reduction=16):
+        super(SEBlock, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        b, c, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1)
+        return x * y.expand_as(x)
+
+class EnhancedResidualBlock(nn.Module):
+    def __init__(self, in_features, hidden_features, dropout_rate=0.1):
+        super(EnhancedResidualBlock, self).__init__()
+        self.norm1 = nn.LayerNorm(in_features)
+        self.linear1 = nn.Linear(in_features, hidden_features)
+        self.norm2 = nn.LayerNorm(hidden_features)
+        self.linear2 = nn.Linear(hidden_features, in_features)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.se = SEBlock(in_features)
+        self.gelu = nn.GELU()
+        
+    def forward(self, x):
+        identity = x
+        x = self.norm1(x)
+        x = self.gelu(self.linear1(x))
+        x = self.norm2(x)
+        x = self.dropout(self.linear2(x))
+        x = x.unsqueeze(-1)
+        x = self.se(x)
+        x = x.squeeze(-1)
+        return x + identity
+
+class ImprovedCCSPredictor(nn.Module):
+    def __init__(self, config, esm_dim=1280*2):
+        super(ImprovedCCSPredictor, self).__init__()
+        
+        self.dropout_rate = config.dropout_rate
+        hidden_dim = config.hidden_dim
+        
+        # Input normalization layers
+        self.seq_norm = nn.LayerNorm(esm_dim)
+        self.cm_norm = nn.LayerNorm(2)
+        
+        # Sequence processor
+        self.sequence_processor = nn.Sequential(
+            nn.Linear(esm_dim, hidden_dim * 2),
+            nn.LayerNorm(hidden_dim * 2),
+            nn.GELU(),
+            nn.Dropout(self.dropout_rate),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(self.dropout_rate)
+        )
+        
+        # Charge/mass processor
+        self.charge_mass_processor = nn.Sequential(
+            nn.Linear(2, hidden_dim // 2),
+            nn.LayerNorm(hidden_dim // 2),
+            nn.GELU(),
+            nn.Dropout(self.dropout_rate),
+            nn.Linear(hidden_dim // 2, hidden_dim // 2),
+            nn.LayerNorm(hidden_dim // 2),
+            nn.GELU(),
+            nn.Dropout(self.dropout_rate)
+        )
+        
+        # Final predictor with residual connections
+        self.predictor = nn.Sequential(
+            nn.Linear(hidden_dim + hidden_dim // 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(self.dropout_rate),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.LayerNorm(hidden_dim // 2),
+            nn.GELU(),
+            nn.Dropout(self.dropout_rate),
+            nn.Linear(hidden_dim // 2, 1)
+        )
+        
+        # Initialize weights carefully
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            nn.init.kaiming_normal_(module.weight, mode='fan_in', nonlinearity='linear')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+                
+    def forward(self, seq_features, charge_mass):
+        # Apply input normalization
+        seq_features = self.seq_norm(seq_features)
+        charge_mass = self.cm_norm(charge_mass)
+        
+        # Process features
+        seq_processed = self.sequence_processor(seq_features)
+        cm_processed = self.charge_mass_processor(charge_mass)
+        
+        # Combine features
+        x = torch.cat([seq_processed, cm_processed], dim=1)
+        
+        # Predict
+        return self.predictor(x)
+
+class EnhancedEnsembleCCSPredictor(nn.Module):
+    def __init__(self, config, esm_dim=1280*2):
+        super(EnhancedEnsembleCCSPredictor, self).__init__()
+        self.models = nn.ModuleList([
+            ImprovedCCSPredictor(config, esm_dim) 
+            for _ in range(config.ensemble_size)
+        ])
+        
+        # Learnable ensemble weights
+        self.ensemble_weights = nn.Parameter(
+            torch.ones(config.ensemble_size) / config.ensemble_size
+        )
+        self.temperature = config.temperature if hasattr(config, 'temperature') else 1.0
+    
+    def forward(self, seq_features, charge_mass):
+        # Get predictions from all models
+        predictions = []
+        for model in self.models:
+            pred = model(seq_features, charge_mass)
+            predictions.append(pred)
+        
+        # Stack predictions and apply temperature scaling
+        stacked_preds = torch.stack(predictions, dim=1)  # [batch_size, n_models, 1]
+        scaled_weights = F.softmax(self.ensemble_weights / self.temperature, dim=0)
+        
+        # Weighted average of predictions
+        weighted_pred = torch.sum(stacked_preds * scaled_weights.view(1, -1, 1), dim=1)
+        
+        if self.training:
+            return weighted_pred, predictions
+        return weighted_pred
 
 class TrainingConfig:
     def __init__(self):
@@ -59,6 +204,7 @@ class SHAPAnalyzer:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = None
         self.normalizer = None
+        self.config = TrainingConfig()
         self.results_dir = "/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/shap_analysis"
         os.makedirs(self.results_dir, exist_ok=True)
         
@@ -131,53 +277,29 @@ class SHAPAnalyzer:
         return train_loader, test_loader, normalizer
     
     def create_shap_explainer(self, background_data, n_background=100):
-        """Create SHAP explainer for the model."""
-        print("Creating SHAP explainer...")
-        
-        # Prepare background data
+        print("Creating SHAP KernelExplainer...")
         background_seq, background_cm = background_data
-        
-        # Create a wrapper function for SHAP
+        # Concatenate sequence and charge/mass features for SHAP
+        background = torch.cat([background_seq, background_cm], dim=1)[:n_background]
+        background_np = background.cpu().numpy()
+        seq_dim = background_seq.shape[1]
+        # Wrapper for model prediction
         def model_predict_wrapper(input_data):
-            """Wrapper function for model prediction that SHAP can use."""
             if isinstance(input_data, np.ndarray):
                 input_data = torch.FloatTensor(input_data)
-            
-            # Reshape input if needed
-            if len(input_data.shape) == 2:
-                # Assume this is sequence features
-                seq_features = input_data.to(self.device)
-                # Use mean charge/mass for background
-                charge_mass = background_cm[:input_data.shape[0]].to(self.device)
-            else:
-                # Assume this is charge/mass features
-                charge_mass = input_data.to(self.device)
-                # Use mean sequence features for background
-                seq_features = background_seq[:input_data.shape[0]].to(self.device)
-            
+            seq_features = input_data[:, :seq_dim].to(self.device)
+            charge_mass = input_data[:, seq_dim:].to(self.device)
             with torch.no_grad():
-                # REPLACE THIS WITH YOUR ACTUAL MODEL PREDICTION
                 predictions = self.model(seq_features, charge_mass)
                 if isinstance(predictions, tuple):
-                    predictions = predictions[0]  # Take only the final predictions
+                    predictions = predictions[0]
                 return predictions.cpu().numpy()
-        
-        # Create SHAP explainer
-        explainer = shap.KernelExplainer(
-            model_predict_wrapper,
-            background_data[0][:n_background].cpu().numpy(),
-            link="identity"
-        )
-        
-        return explainer
-    
-    def analyze_feature_importance(self, test_data, explainer, n_samples=100):
-        """Analyze feature importance using SHAP values."""
+        explainer = shap.KernelExplainer(model_predict_wrapper, background_np)
+        return explainer, seq_dim
+
+    def analyze_feature_importance(self, test_data, explainer, seq_dim, n_samples=100):
         print("Analyzing feature importance...")
-        
         test_seq, test_cm, test_ccs = test_data
-        
-        # Sample data for analysis
         if n_samples < len(test_seq):
             indices = np.random.choice(len(test_seq), n_samples, replace=False)
             sample_seq = test_seq[indices]
@@ -187,24 +309,17 @@ class SHAPAnalyzer:
             sample_seq = test_seq
             sample_cm = test_cm
             sample_ccs = test_ccs
-        
-        # Calculate SHAP values for sequence features
-        print("Calculating SHAP values for sequence features...")
-        shap_values_seq = explainer.shap_values(
-            sample_seq.cpu().numpy(),
-            nsamples=100  # Number of background samples to use
-        )
-        
-        # Calculate SHAP values for charge/mass features
-        print("Calculating SHAP values for charge/mass features...")
-        shap_values_cm = explainer.shap_values(
-            sample_cm.cpu().numpy(),
-            nsamples=100
-        )
-        
-        # Analyze and visualize results
+        # Concatenate for SHAP
+        sample = torch.cat([sample_seq, sample_cm], dim=1).cpu().numpy()
+        print("[DEBUG] sample shape:", sample.shape)
+        print("[DEBUG] background shape:", explainer.data.data.shape)
+        # Calculate SHAP values
+        print("Calculating SHAP values for all features (sequence + charge/mass)...")
+        shap_values = explainer.shap_values(sample, nsamples=100)
+        # Split SHAP values
+        shap_values_seq = shap_values[:, :seq_dim]
+        shap_values_cm = shap_values[:, seq_dim:]
         self._visualize_shap_analysis(shap_values_seq, shap_values_cm, sample_seq, sample_cm, sample_ccs)
-        
         return shap_values_seq, shap_values_cm
     
     def _visualize_shap_analysis(self, shap_values_seq, shap_values_cm, seq_data, cm_data, ccs_data):
@@ -247,8 +362,8 @@ class SHAPAnalyzer:
         mean_shap_cm = np.mean(np.abs(shap_values_cm), axis=0)
         
         # Get top features
-        top_seq_indices = np.argsort(mean_shap_seq)[-20:]  # Top 20 sequence features
-        top_seq_values = mean_shap_seq[top_seq_indices]
+        top_seq_indices = np.argsort(mean_shap_seq)[-100:]  # Top 20 sequence features
+        top_seq_values = np.asarray(mean_shap_seq[top_seq_indices]).astype(float).flatten()
         
         # Plot sequence feature importance
         plt.figure(figsize=(12, 8))
@@ -264,7 +379,7 @@ class SHAPAnalyzer:
         # Plot charge/mass feature importance
         plt.figure(figsize=(8, 6))
         feature_names = ["Charge", "Mass"]
-        plt.bar(feature_names, mean_shap_cm)
+        plt.bar(feature_names, np.asarray(mean_shap_cm).astype(float).flatten())
         plt.ylabel("Mean |SHAP Value|")
         plt.title("Charge/Mass Feature Importance")
         plt.tight_layout()
@@ -290,13 +405,22 @@ class SHAPAnalyzer:
             top_seq_features = np.argsort(mean_shap_seq)[-10:]
             f.write(f"Top 10 most important sequence features:\n")
             for i, feat_idx in enumerate(top_seq_features):
-                f.write(f"  {i+1}. Seq_Feature_{feat_idx}: {mean_shap_seq[feat_idx]:.6f}\n")
+                value = mean_shap_seq[feat_idx]
+                if hasattr(value, "item"):
+                    value = value.item()
+                f.write(f"  {i+1}. Seq_Feature_{feat_idx}: {value:.6f}\n")
             
             # Charge/mass feature importance
             mean_shap_cm = np.mean(np.abs(shap_values_cm), axis=0)
             f.write(f"\nCharge/Mass feature importance:\n")
-            f.write(f"  Charge: {mean_shap_cm[0]:.6f}\n")
-            f.write(f"  Mass: {mean_shap_cm[1]:.6f}\n")
+            charge_val = mean_shap_cm[0]
+            if hasattr(charge_val, "item"):
+                charge_val = charge_val.item()
+            mass_val = mean_shap_cm[1]
+            if hasattr(mass_val, "item"):
+                mass_val = mass_val.item()
+            f.write(f"  Charge: {charge_val:.6f}\n")
+            f.write(f"  Mass: {mass_val:.6f}\n")
             
             # Model Insights
             f.write("\n\n2. MODEL INSIGHTS\n")
@@ -308,38 +432,28 @@ class SHAPAnalyzer:
                 f.write("• Mass appears to be more important than charge for CCS prediction\n")
             
             f.write(f"• Sequence features show varying importance levels\n")
-            f.write(f"• Top sequence feature has importance: {mean_shap_seq[top_seq_features[-1]]:.6f}\n")
+            top_feat_val = mean_shap_seq[top_seq_features[-1]]
+            if hasattr(top_feat_val, "item"):
+                top_feat_val = top_feat_val.item()
+            f.write(f"• Top sequence feature has importance: {top_feat_val:.6f}\n")
         
         print(f"Comprehensive report saved to: {report_path}")
     
     def run_full_analysis(self):
-        """Run the complete interpretability analysis."""
         print("Starting comprehensive SHAP analysis...")
-        
-        # Load model and data
         train_loader, test_loader = self.load_model_and_data()
-        
-        # Get background data for SHAP
         background_batch = next(iter(train_loader))
-        background_seq, background_cm = background_batch[1], background_batch[0]
-        
-        # Create SHAP explainer
-        explainer = self.create_shap_explainer((background_seq, background_cm))
-        
-        # Get test data
+        background_cm, background_seq, _ = background_batch
+        explainer, seq_dim = self.create_shap_explainer((background_seq, background_cm))
         test_batch = next(iter(test_loader))
-        test_seq, test_cm, test_ccs = test_batch
-        
-        # Run SHAP analysis
+        test_cm, test_seq, test_ccs = test_batch
         shap_values_seq, shap_values_cm = self.analyze_feature_importance(
             (test_seq, test_cm, test_ccs), 
-            explainer, 
+            explainer,
+            seq_dim,
             n_samples=100
         )
-        
-        # Create comprehensive report
         self.create_comprehensive_report(shap_values_seq, shap_values_cm)
-        
         print(f"\nAnalysis completed! Results saved in: {self.results_dir}")
         print("\nGenerated files:")
         print("- SHAP summary plots")
@@ -351,14 +465,14 @@ def main():
     
     # Data paths (update these to match your actual paths)
     data_paths = {
-        'train_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/train_1_new_charge3.tsv',
-        'test_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/test_1_new_charge3.tsv',
-        'train_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_trainnewdata_charge3a1000b1gamma0.pt',
-        'test_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_testnewdata_charge3a1000b1gamma0.pt'
+        'train_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/train_1_new.tsv',
+        'test_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/test_1_new.tsv',
+        'train_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_trainnewdata_a1000b1gamma0.pt',
+        'test_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_testnewdata_a1000b1gamma0.pt'
     }
     
     # Model path (update this to your actual model path)
-    model_path = '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results/best_model_ensemble_fold_1.pt'
+    model_path = '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results/Results_12June25/best_model_fold_5_ensemble.pt'
     
     # Create analyzer and run analysis
     analyzer = SHAPAnalyzer(model_path, data_paths)
