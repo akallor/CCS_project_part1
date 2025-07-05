@@ -22,6 +22,7 @@ from sklearn.preprocessing import StandardScaler
 import os
 import csv
 import warnings
+import fileinput
 warnings.filterwarnings('ignore')
 
 # Model classes from shap_attention_analyzer.py
@@ -296,9 +297,21 @@ class SHAPAnalyzer:
                 predictions = self.model(seq_features, charge_mass)
                 if isinstance(predictions, tuple):
                     predictions = predictions[0]
-                return predictions.cpu().numpy()
+                preds_np = predictions.cpu().numpy()
+                print("[DEBUG] Model predictions (first 5):", preds_np[:5].flatten())
+                return preds_np
         explainer = shap.KernelExplainer(model_predict_wrapper, background_np)
         return explainer, seq_dim
+
+    def test_sequence_sensitivity(self, sample_seq, sample_cm):
+        print("[DEBUG] Testing model sensitivity to sequence features...")
+        seq = sample_seq[0].clone()
+        cm = sample_cm[0].clone()
+        original_pred = self.model(seq.unsqueeze(0).to(self.device), cm.unsqueeze(0).to(self.device))
+        seq_perturbed = seq.clone()
+        seq_perturbed[0] += 1.0  # Perturb the first sequence feature
+        new_pred = self.model(seq_perturbed.unsqueeze(0).to(self.device), cm.unsqueeze(0).to(self.device))
+        print(f"[DEBUG] Original pred: {original_pred.item():.6f}, New pred after perturbing seq[0]: {new_pred.item():.6f}, Difference: {abs(new_pred.item() - original_pred.item()):.6f}")
 
     def analyze_feature_importance(self, test_data, explainer, seq_dim, n_samples=100):
         print("Analyzing feature importance...")
@@ -318,9 +331,9 @@ class SHAPAnalyzer:
         sample = torch.cat([sample_seq, sample_cm], dim=1).cpu().numpy()
         print("[DEBUG] sample shape:", sample.shape)
         print("[DEBUG] background shape:", explainer.data.data.shape)
-        # Calculate SHAP values
-        print("Calculating SHAP values for all features (sequence + charge/mass)...")
-        shap_values = explainer.shap_values(sample, nsamples=100)
+        # Calculate SHAP values with more samples
+        print("Calculating SHAP values for all features (sequence + charge/mass) with nsamples=1000...")
+        shap_values = explainer.shap_values(sample, nsamples=1000)
         # Split SHAP values
         shap_values_seq = shap_values[:, :seq_dim]
         shap_values_cm = shap_values[:, seq_dim:]
@@ -330,24 +343,42 @@ class SHAPAnalyzer:
     def _visualize_shap_analysis(self, shap_values_seq, shap_values_cm, seq_data, cm_data, ccs_data):
         """Visualize SHAP analysis results."""
         print("Creating SHAP visualizations...")
-        
-        # 1. Summary plot for sequence features
+
+        # Calculate mean absolute SHAP values for sequence features
+        mean_shap_seq = np.mean(np.abs(shap_values_seq), axis=0)
+        mean_shap_seq = np.squeeze(mean_shap_seq)  # Ensure 1D
+        # Get top 20 sequence feature indices (most important)
+        top_n = 20
+        top_seq_indices = np.argsort(mean_shap_seq)[-top_n:][::-1]  # descending order
+        top_seq_indices = np.array(top_seq_indices).flatten().astype(int)  # Ensure 1D
+        top_seq_values = mean_shap_seq[top_seq_indices]
+        top_seq_names = [f"Seq_Feature_{i}" for i in top_seq_indices]
+
+        # Squeeze SHAP values for plotting (sequence)
+        shap_seq_for_plot = np.squeeze(shap_values_seq[:, top_seq_indices])  # shape (32, 20)
+        print("shap_seq_for_plot shape:", shap_seq_for_plot.shape)
+
+        # 1. Summary plot for top sequence features
         plt.figure(figsize=(12, 8))
         shap.summary_plot(
-            shap_values_seq,
-            seq_data.cpu().numpy(),
-            feature_names=[f"Seq_Feature_{i}" for i in range(seq_data.shape[1])],
+            shap_seq_for_plot,
+            seq_data.cpu().numpy()[:, top_seq_indices],
+            feature_names=top_seq_names,
             show=False
         )
-        plt.title("SHAP Summary Plot - Sequence Features")
+        plt.title("SHAP Summary Plot - Top Sequence Features")
         plt.tight_layout()
         plt.savefig(os.path.join(self.results_dir, "shap_summary_sequence.png"), dpi=300, bbox_inches='tight')
         plt.close()
-        
+
+        # Squeeze SHAP values for charge/mass features
+        shap_cm_for_plot = np.squeeze(shap_values_cm)  # shape (32, 2)
+        print("shap_cm_for_plot shape:", shap_cm_for_plot.shape)
+
         # 2. Summary plot for charge/mass features
         plt.figure(figsize=(10, 6))
         shap.summary_plot(
-            shap_values_cm,
+            shap_cm_for_plot,
             cm_data.cpu().numpy(),
             feature_names=["Charge", "Mass"],
             show=False
@@ -356,34 +387,45 @@ class SHAPAnalyzer:
         plt.tight_layout()
         plt.savefig(os.path.join(self.results_dir, "shap_summary_charge_mass.png"), dpi=300, bbox_inches='tight')
         plt.close()
-        
+
         # 3. Feature importance bar plot
-        self._plot_feature_importance_bar(shap_values_seq, shap_values_cm)
-    
-    def _plot_feature_importance_bar(self, shap_values_seq, shap_values_cm):
+        self._plot_feature_importance_bar(mean_shap_seq, shap_values_cm, top_seq_indices, top_seq_values, top_seq_names)
+
+    def _plot_feature_importance_bar(self, mean_shap_seq, shap_values_cm, top_seq_indices, top_seq_values, top_seq_names):
         """Plot feature importance as a bar chart."""
-        # Calculate mean absolute SHAP values
-        mean_shap_seq = np.mean(np.abs(shap_values_seq), axis=0)
-        mean_shap_cm = np.mean(np.abs(shap_values_cm), axis=0)
-        
-        # Get top features
-        top_seq_indices = np.argsort(mean_shap_seq)[-20:]  # Top 20 sequence features
-        top_seq_values = np.asarray(mean_shap_seq[top_seq_indices]).astype(float).flatten()
-        
-        # Plot sequence feature importance
+        # Plot sequence feature importance (top N)
+        mean_shap_seq = np.squeeze(mean_shap_seq)  # Ensure 1D
+        print("mean_shap_seq shape after squeeze:", mean_shap_seq.shape)
+
+        top_n = 20
+        top_seq_indices = np.argsort(mean_shap_seq)[-top_n:][::-1]
+        top_seq_names = [f"Seq_Feature_{i}" for i in top_seq_indices]
+        top_seq_values = mean_shap_seq[top_seq_indices]
+        top_seq_values = np.ravel(top_seq_values)  # Ensure 1D
+
+        print("Top sequence feature indices:", top_seq_indices)
+        print("Top sequence feature names:", top_seq_names)
+        print("Top sequence feature SHAP values:", top_seq_values)
+        print("Shapes:", top_seq_indices.shape, top_seq_values.shape)
+
+        # Additional debug: check if all indices are zero
+        if np.all(top_seq_indices == 0):
+            print("[WARNING] All top sequence feature indices are zero. This suggests a bug in SHAP value computation or feature splitting.")
+            print("First 10 mean_shap_seq values:", mean_shap_seq[:10])
+
         plt.figure(figsize=(12, 8))
-        plt.barh(range(len(top_seq_indices)), top_seq_values)
-        plt.yticks(range(len(top_seq_indices)), [f"Seq_Feature_{i}" for i in top_seq_indices])
+        plt.barh(top_seq_names, top_seq_values)
         plt.xlabel("Mean |SHAP Value|")
         plt.title("Top 20 Most Important Sequence Features")
         plt.gca().invert_yaxis()
         plt.tight_layout()
         plt.savefig(os.path.join(self.results_dir, "feature_importance_sequence.png"), dpi=300, bbox_inches='tight')
         plt.close()
-        
+
         # Plot charge/mass feature importance
-        plt.figure(figsize=(8, 6))
+        mean_shap_cm = np.mean(np.abs(shap_values_cm), axis=0)
         feature_names = ["Charge", "Mass"]
+        plt.figure(figsize=(8, 6))
         plt.bar(feature_names, np.asarray(mean_shap_cm).astype(float).flatten())
         plt.ylabel("Mean |SHAP Value|")
         plt.title("Charge/Mass Feature Importance")
@@ -394,6 +436,16 @@ class SHAPAnalyzer:
     def create_comprehensive_report(self, shap_values_seq, shap_values_cm):
         """Create a comprehensive analysis report."""
         print("Creating comprehensive analysis report...")
+        # Debug: print shape and sample values before squeezing
+        print("[DEBUG] shap_values_seq shape:", shap_values_seq.shape)
+        print("[DEBUG] shap_values_seq sample:", shap_values_seq[:5])
+        print("[DEBUG] shap_values_cm shape:", shap_values_cm.shape)
+        print("[DEBUG] shap_values_cm sample:", shap_values_cm[:5])
+        # Squeeze singleton dimensions
+        shap_values_seq = np.squeeze(shap_values_seq)
+        shap_values_cm = np.squeeze(shap_values_cm)
+        print("[DEBUG] shap_values_seq shape after squeeze:", shap_values_seq.shape)
+        print("[DEBUG] shap_values_cm shape after squeeze:", shap_values_cm.shape)
         mean_shap_seq = np.mean(np.abs(shap_values_seq), axis=0)
         top_seq_features = np.argsort(mean_shap_seq)[-10:]
         mean_shap_cm = np.mean(np.abs(shap_values_cm), axis=0)
@@ -447,6 +499,8 @@ class SHAPAnalyzer:
         explainer, seq_dim = self.create_shap_explainer((background_seq, background_cm))
         test_batch = next(iter(test_loader))
         test_cm, test_seq, test_ccs = test_batch
+        # Test model sensitivity to sequence features
+        self.test_sequence_sensitivity(test_seq, test_cm)
         shap_values_seq, shap_values_cm = self.analyze_feature_importance(
             (test_seq, test_cm, test_ccs), 
             explainer,
@@ -460,6 +514,25 @@ class SHAPAnalyzer:
         print("- Feature importance visualizations")
         print("- Comprehensive analysis report")
 
+def _replace_in_file(filepath, replacements):
+    with fileinput.FileInput(filepath, inplace=True, backup='.bak') as file:
+        for line in file:
+            for old, new in replacements.items():
+                line = line.replace(old, new)
+            print(line, end='')
+
+# List of replacements
+replacements = {
+    'train_1_new_charge3.tsv': 'train_1_new.tsv',
+    'test_1_new_charge3.tsv': 'test_1_new.tsv',
+    'sequenceTensor_train_charge3.pt': 'sequenceTensor_train.pt',
+    'sequenceTensor_test_charge3.pt': 'sequenceTensor_test.pt',
+    'model_path = ': 'model_path = "/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results/Results_12June25/best_model_ensemble_fold_4.pt" # ',
+}
+
+# Apply replacements to this file
+_replace_in_file(__file__, replacements)
+
 def main():
     """Main function to run the interpretability analysis."""
     
@@ -472,7 +545,7 @@ def main():
     }
     
     # Model path (update this to your actual model path)
-    model_path = '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results/Results_12June25/best_model_ensemble_fold_5.pt'
+    model_path = '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results/Results_12June25/best_model_ensemble_fold_4.pt'
     
     # Create analyzer and run analysis
     analyzer = SHAPAnalyzer(model_path, data_paths)
