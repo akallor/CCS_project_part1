@@ -211,17 +211,20 @@ class SHAPAnalyzer:
     def load_model_and_data(self):
         """Load the trained model and prepare data for analysis."""
         print("Loading model and data...")
-        
-        # Load model - REPLACE THIS SECTION
         self.model = EnhancedEnsembleCCSPredictor(self.config)
         checkpoint = torch.load(self.model_path, map_location=self.device)
         self.model.load_state_dict(checkpoint)
         self.model.to(self.device)
         self.model.eval()
-        
-        # Load data
+        # Debug: print first sequence layer weights
+        try:
+            if hasattr(self.model, 'models'):
+                print("[DEBUG] First sequence layer weights (ensemble, model 0):", self.model.models[0].sequence_processor[0].weight)
+            else:
+                print("[DEBUG] First sequence layer weights (single model):", self.model.sequence_processor[0].weight)
+        except Exception as e:
+            print("[DEBUG] Could not print sequence layer weights:", e)
         train_loader, test_loader, self.normalizer = self._load_data()
-        
         return train_loader, test_loader
     
     def _load_data(self):
@@ -309,6 +312,8 @@ class SHAPAnalyzer:
             sample_seq = test_seq
             sample_cm = test_cm
             sample_ccs = test_ccs
+        # Debug: print mean and std of sample_seq
+        print("[DEBUG] sample_seq mean:", sample_seq.mean().item(), "std:", sample_seq.std().item())
         # Concatenate for SHAP
         sample = torch.cat([sample_seq, sample_cm], dim=1).cpu().numpy()
         print("[DEBUG] sample shape:", sample.shape)
@@ -362,7 +367,7 @@ class SHAPAnalyzer:
         mean_shap_cm = np.mean(np.abs(shap_values_cm), axis=0)
         
         # Get top features
-        top_seq_indices = np.argsort(mean_shap_seq)[-100:]  # Top 20 sequence features
+        top_seq_indices = np.argsort(mean_shap_seq)[-20:]  # Top 20 sequence features
         top_seq_values = np.asarray(mean_shap_seq[top_seq_indices]).astype(float).flatten()
         
         # Plot sequence feature importance
@@ -389,29 +394,28 @@ class SHAPAnalyzer:
     def create_comprehensive_report(self, shap_values_seq, shap_values_cm):
         """Create a comprehensive analysis report."""
         print("Creating comprehensive analysis report...")
-        
+        mean_shap_seq = np.mean(np.abs(shap_values_seq), axis=0)
+        top_seq_features = np.argsort(mean_shap_seq)[-10:]
+        mean_shap_cm = np.mean(np.abs(shap_values_cm), axis=0)
+        # Debug: print SHAP values and indices
+        print("[DEBUG] mean_shap_seq:", mean_shap_seq)
+        print("[DEBUG] top_seq_features:", top_seq_features)
+        print("[DEBUG] mean_shap_cm:", mean_shap_cm)
         report_path = os.path.join(self.results_dir, "interpretability_report.txt")
-        
         with open(report_path, 'w') as f:
             f.write("CCS Prediction Model Interpretability Analysis Report\n")
             f.write("=" * 60 + "\n\n")
-            
             # SHAP Analysis Summary
             f.write("1. SHAP ANALYSIS SUMMARY\n")
             f.write("-" * 30 + "\n")
-            
             # Sequence feature importance
-            mean_shap_seq = np.mean(np.abs(shap_values_seq), axis=0)
-            top_seq_features = np.argsort(mean_shap_seq)[-10:]
             f.write(f"Top 10 most important sequence features:\n")
             for i, feat_idx in enumerate(top_seq_features):
                 value = mean_shap_seq[feat_idx]
                 if hasattr(value, "item"):
                     value = value.item()
                 f.write(f"  {i+1}. Seq_Feature_{feat_idx}: {value:.6f}\n")
-            
             # Charge/mass feature importance
-            mean_shap_cm = np.mean(np.abs(shap_values_cm), axis=0)
             f.write(f"\nCharge/Mass feature importance:\n")
             charge_val = mean_shap_cm[0]
             if hasattr(charge_val, "item"):
@@ -421,22 +425,18 @@ class SHAPAnalyzer:
                 mass_val = mass_val.item()
             f.write(f"  Charge: {charge_val:.6f}\n")
             f.write(f"  Mass: {mass_val:.6f}\n")
-            
             # Model Insights
             f.write("\n\n2. MODEL INSIGHTS\n")
             f.write("-" * 30 + "\n")
-            
             if mean_shap_cm[0] > mean_shap_cm[1]:
                 f.write("• Charge appears to be more important than mass for CCS prediction\n")
             else:
                 f.write("• Mass appears to be more important than charge for CCS prediction\n")
-            
             f.write(f"• Sequence features show varying importance levels\n")
             top_feat_val = mean_shap_seq[top_seq_features[-1]]
             if hasattr(top_feat_val, "item"):
                 top_feat_val = top_feat_val.item()
             f.write(f"• Top sequence feature has importance: {top_feat_val:.6f}\n")
-        
         print(f"Comprehensive report saved to: {report_path}")
     
     def run_full_analysis(self):
@@ -472,7 +472,7 @@ def main():
     }
     
     # Model path (update this to your actual model path)
-    model_path = '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results/Results_12June25/best_model_fold_5_ensemble.pt'
+    model_path = '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results/Results_12June25/best_model_ensemble_fold_5.pt'
     
     # Create analyzer and run analysis
     analyzer = SHAPAnalyzer(model_path, data_paths)
