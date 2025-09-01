@@ -39,7 +39,7 @@ DATA_PATHS = {
 }
 
 class TrainingConfig:
-    def __init__(self, model_type='both'):
+    def __init__(self, model_type='ensemble'):
         # TPU-optimized parameters
         self.bs = 256  # Further reduced batch size
         self.base_lr = 1e-4  # Reduced learning rate
@@ -595,8 +595,68 @@ def main():
     print("Model created successfully!")
     print(f"Model type: {config.model_type}")
     print(f"Feature dimension: {esm_dim}")
+    
+    print("\n" + "="*50)
+    print("STARTING TRAINING")
+    print("="*50)
+    
+    # Train models
+    if config.model_type == 'both':
+        print("\nTraining Improved CCS Predictor...")
+        train_model(
+            model['improved'], 
+            train_loader, 
+            test_loader, 
+            optimizer['improved'], 
+            scheduler['improved'], 
+            criterion, 
+            config, 
+            device, 
+            'improved'
+        )
+        
+        print("\nTraining Enhanced Ensemble CCS Predictor...")
+        train_model(
+            model['ensemble'], 
+            train_loader, 
+            test_loader, 
+            optimizer['ensemble'], 
+            scheduler['ensemble'], 
+            criterion, 
+            config, 
+            device, 
+            'ensemble'
+        )
+        
+        # Evaluate both models
+        print("\nEvaluating Improved CCS Predictor...")
+        evaluate_model(model['improved'], test_loader, normalizer, device, 'improved')
+        
+        print("\nEvaluating Enhanced Ensemble CCS Predictor...")
+        evaluate_model(model['ensemble'], test_loader, normalizer, device, 'ensemble')
+        
+    else:
+        print(f"\nTraining {config.model_type} model...")
+        train_model(
+            model, 
+            train_loader, 
+            test_loader, 
+            optimizer, 
+            scheduler, 
+            criterion, 
+            config, 
+            device, 
+            config.model_type
+        )
+        
+        # Evaluate the model
+        print(f"\nEvaluating {config.model_type} model...")
+        evaluate_model(model, test_loader, normalizer, device, config.model_type)
+    
+    print("\n" + "="*50)
+    print("TRAINING COMPLETED SUCCESSFULLY!")
+    print("="*50)
 
 if __name__ == '__main__':
     main()
-
 
