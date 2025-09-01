@@ -33,13 +33,13 @@ np.set_printoptions(threshold=np.inf)
 DATA_PATHS = {
     'train_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/train_1_new_charge2.tsv',
     'test_data': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/test_1_new_charge2.tsv',
-    'train_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_nc_split_a1000b1gamma0.pt',  # Updated for ESM-2
-    'test_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_test_nc_split_a1000b1gamma0.pt',  # Updated for ESM-2
+    'train_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_trainnewdata_charge2a1000b1gamma0.pt',  # Updated for ESM-2
+    'test_sequence': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/processed_data/sequenceTensor_testnewdata_charge2a1000b1gamma0.pt',  # Updated for ESM-2
     'results': '/content/drive/MyDrive/Colab_CCS_results/MHC_1/Experiment/results_esm2'
 }
 
 class TrainingConfig:
-    def __init__(self, model_type='ensemble'):
+    def __init__(self, model_type='both'):
         # TPU-optimized parameters
         self.bs = 256  # Further reduced batch size
         self.base_lr = 1e-4  # Reduced learning rate
@@ -598,4 +598,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
