@@ -29,21 +29,21 @@ def concatenate_mhc_files(file_paths, required_columns, output_file):
 
     for file_path in file_paths:
         try:
-            # Extract dataset ID using regex
+            #Extract dataset ID using regex
             dataset_match = re.search(r'(PXD\d+)', file_path, re.IGNORECASE)
             dataset_id = dataset_match.group(1).upper() if dataset_match else f"Unknown_{len(file_info)+1}"
 
             print(f"Processing {dataset_id}: {file_path}")
 
-            # Check if file exists
+            #Check if file exists
             if not os.path.exists(file_path):
                 print(f"Warning: File not found - {file_path}")
                 continue
 
-            # Read the TSV file
+            #Read the TSV file
             df = pd.read_csv(file_path, sep="\t")
 
-            # Check if all required columns exist
+            #Check if all required columns exist
             missing_cols = [col for col in required_columns if col not in df.columns]
             if missing_cols:
                 print(f"Warning: Missing columns in {dataset_id}: {missing_cols}")
@@ -52,13 +52,13 @@ def concatenate_mhc_files(file_paths, required_columns, output_file):
             else:
                 available_cols = required_columns
 
-            # Select only required columns
+            #Select only required columns
             df_subset = df[available_cols].copy()
 
-            # Add source dataset column
+            #Add source dataset column
             df_subset['Dataset'] = dataset_id
 
-            # Add file info for summary
+            #Add file info for summary
             file_info.append({
                 'Dataset': dataset_id,
                 'File': os.path.basename(file_path),
@@ -76,19 +76,19 @@ def concatenate_mhc_files(file_paths, required_columns, output_file):
     if not combined_data:
         raise ValueError("No files were successfully processed!")
 
-    # Concatenate all dataframes
+    #Concatenate all dataframes
     print("\nCombining all datasets...")
     combined_df = pd.concat(combined_data, ignore_index=True, sort=False)
 
-    # Create output directory if it doesn't exist
+    #Create output directory if it doesn't exist
     output_dir = os.path.dirname(output_file)
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    # Save to TSV file
+    #Save to TSV file
     combined_df.to_csv(output_file, sep="\t", index=False)
 
-    # Print summary
+    #Print summary
     print(f"\n{'='*50}")
     print("CONCATENATION SUMMARY")
     print(f"{'='*50}")
@@ -104,9 +104,8 @@ def concatenate_mhc_files(file_paths, required_columns, output_file):
 
     return combined_df
 
-# Usage example with your specific file paths
 def main():
-    # Define your file paths
+    #Define file paths
     file_paths = [
         "/content/drive/MyDrive/Colab_CCS_results/MHC_1/raw_data/New_data/PXD038782/pxd038782_complete.tsv",
         "/content/drive/MyDrive/Colab_CCS_results/MHC_1/raw_data/New_data/PXD035344/pxd035344_complete.tsv",
@@ -114,24 +113,24 @@ def main():
         "/content/drive/MyDrive/Colab_CCS_results/MHC_1/raw_data/New_data/PXD038273/pxd038273_complete.tsv"
     ]
 
-    # Define required columns
+    #Define required columns
     req_cols = ['Peptide', 'Mass', 'm/z', 'Length', '1/k0 Range']
 
-    # Define output file path
+    #Define output file path
     output_file = "/content/drive/MyDrive/Colab_CCS_results/MHC_1/combined_mhc1_data.tsv"
 
-    # Run the concatenation
+    #Run the concatenation
     try:
         combined_df = concatenate_mhc_files(file_paths, req_cols, output_file)
 
-        # Optional: Display basic statistics
+        #Display basic statistics
         print(f"\n{'='*50}")
         print("BASIC STATISTICS")
         print(f"{'='*50}")
         print(f"Datasets: {combined_df['Dataset'].nunique()}")
         print(f"Total peptides: {len(combined_df):,}")
 
-        # Show dataset distribution
+        #Show dataset distribution
         print("\nDataset distribution:")
         dataset_counts = combined_df['Dataset'].value_counts()
         for dataset, count in dataset_counts.items():
@@ -140,7 +139,7 @@ def main():
     except Exception as e:
         print(f"Error: {str(e)}")
 
-# Alternative function for direct usage (without the main wrapper)
+#Alternative function for direct usage (without the main wrapper)
 def quick_concatenate():
     """Quick function to run the concatenation directly"""
 
@@ -156,6 +155,5 @@ def quick_concatenate():
 
     return concatenate_mhc_files(file_paths, req_cols, output_file)
 
-# Run the function
 if __name__ == "__main__":
     main()
