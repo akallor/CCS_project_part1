@@ -1,19 +1,24 @@
-Codes used to train and test models for CCS prediction in immunopeptides.
+This repository details the development of a collision-cross section (CCS) predictor dedicated to immunopeptides, both HLA-I and HLA-II peptides.
+Separate predictors have been developed for each class, which can be found in the "CCS_unified_model" directory.
 
-Objectives:
-1) To evaluate the suitability of an existing language model (PPLN) for predicting CCS in immunopeptides.
-2) To propose improvements to the existing language model for CCS prediction in immunopeptides.
-3) To use the improvements to build dedicated language models for immunopeptides, where possible.
+The predictor works as follows:
 
-This repository contains/will contain:
+
+<img width="10050" height="5465" alt="CCS_model_explained" src="https://github.com/user-attachments/assets/be58f008-2b11-4e95-b451-e7ebc8185b8e" />
+
+1) A feature extractor consisting of the ESM-2 protein language model concatenated with charge tokens and peptide features (hydrophobicity, polarity, basicity) to form a combined feature vector.
+2) A bidirectional, 2-layered, LSTM recurrent neural network (RNN) to predict the collison cross section of immunopeptides based on the extracted features.
+
+The results are evaluated through a) R-squared measurements, b) Residual density, c) Learning rates and d) SHAP value measurements. 
+
+This model was inspired by the PPLN model developed by Nakai et al.
+
+
+###Previous version:
+####This repository also contains:
 1) Data: Immunopeptide data derived from initially 2 public datasets: PXD038782 (TOF-IMS/Orbitrap data) and JPST002044 (timsTOF).
 2) Models: PPLN pretrained model and the ESM-1b and 2 models (to be included later).
 3) Microsoft BitNet as a model resource optimizer.
 4) Links to Colab, where most codes will be run.
 
-The order of functioning is as follows:
-1) Prepare the datasets to contain at the minimum peptide sequence, charge, mass and collision cross section values (calculated using the Mason-Schamp equation from 1/k0 or invk0 found in the data) and other optional parameters such as length.
-2) Input the prepared data to the "preprocessing.py" script of PPLN and run preprocessing (however, preprocessing only needs sequences).
-3) Perform training and testing with the "main" script (to test the output from the training on a pre-trained neural network to output CCS).
-4) Output will be the predicted CCS values per immunopeptide, which must be evaluated using either or all of RMSE, MAE and Pearson's correlation.
-5) Output will also be evaluated on how accurately the CCS values can be predicted for immune peptides and whether it can distinguish between MHC-1 and MHC-2.
+
