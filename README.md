@@ -3,8 +3,8 @@ Separate predictors have been developed for each class, which can be found in th
 
 The predictor works as follows:
 
+<img width="10050" height="5465" alt="CCS_model_explained" src="https://github.com/user-attachments/assets/21d47d66-b0a6-4e8e-a29a-e5757df36036" />
 
-<img width="10050" height="5465" alt="CCS_model_explained" src="https://github.com/user-attachments/assets/be58f008-2b11-4e95-b451-e7ebc8185b8e" />
 
 1) A feature extractor consisting of the ESM-2 protein language model concatenated with charge tokens and peptide features (hydrophobicity, polarity, basicity) to form a combined feature vector.
 2) A bidirectional, 2-layered, LSTM recurrent neural network (RNN) to predict the collison cross section of immunopeptides based on the extracted features.
