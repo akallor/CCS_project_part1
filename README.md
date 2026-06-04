@@ -3,7 +3,8 @@ Separate predictors have been developed for each class, which can be found in th
 
 The predictor works as follows:
 
-<img width="10050" height="5465" alt="CCS_model_explained" src="https://github.com/user-attachments/assets/21d47d66-b0a6-4e8e-a29a-e5757df36036" />
+
+<img width="9431" height="4426" alt="CCS_model_explained" src="https://github.com/user-attachments/assets/c3aa61f1-db1f-4846-b063-78e63b63e8a6" />
 
 
 1) A feature extractor consisting of the ESM-2 protein language model concatenated with charge tokens and peptide features (hydrophobicity, polarity, basicity) to form a combined feature vector.
